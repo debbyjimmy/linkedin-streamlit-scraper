@@ -37,45 +37,60 @@ def should_keep_field(field):
     )
 
 st.title("🔍 LinkedIn Profile Scraper (Batch)")
-st.markdown("Upload a CSV file with LinkedIn profile URLs in the first column.")
+st.markdown("Upload a CSV file with LinkedIn profile URLs in the first column. Then click **Start Scraping**.")
 
-uploaded_file = st.file_uploader("Choose a CSV file", type=["csv"])
+uploaded_file = st.file_uploader("📁 Choose a CSV file", type=["csv"])
+
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
     if df.empty or df.columns[0] == "":
-        st.error("CSV must have LinkedIn URLs in the first column.")
+        st.error("⚠️ CSV must have LinkedIn URLs in the first column.")
     else:
         linkedin_urls = df.iloc[:, 0].dropna().tolist()
-        results = []
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+        st.success(f"✅ Uploaded {len(linkedin_urls)} LinkedIn URLs.")
 
-        with st.spinner("Scraping profiles..."):
-            for idx, url in enumerate(linkedin_urls):
-                try:
-                    response = requests.get(API_URL, params={"apikey": API_KEY, "linkedInUrl": url})
-                    result = response.json()
+        # Start scraping only when button is clicked
+        if st.button("▶️ Start Scraping"):
+            results = []
+            progress_bar = st.progress(0)
+            status_text = st.empty()
 
-                    # Check for API error or failure
-                    if not result.get("success", False):
-                        st.error(f"🚫 Scrapin API error: {result.get('message', 'Unknown error')}")
-                        st.stop()
+            with st.spinner("Scraping profiles..."):
+                for idx, url in enumerate(linkedin_urls):
+                    try:
+                        response = requests.get(API_URL, params={"apikey": API_KEY, "linkedInUrl": url})
+                        result = response.json()
 
-                    flat = flatten_json(result)
-                    filtered = {k: v for k, v in flat.items() if should_keep_field(k)}
-                    filtered["sourceUrl"] = url
-                    filtered["status"] = "✅ Success"
-                    results.append(filtered)
+                        if not result.get("success", False):
+                            results.append({
+                                "sourceUrl": url,
+                                "status": f"🚫 API Error: {result.get('message', 'Unknown error')}"
+                            })
+                            continue
 
-                except Exception as e:
-                    results.append({"sourceUrl": url, "status": f"🛑 Error: {str(e)}"})
-                time.sleep(DELAY_SEC)
-                progress = int((idx + 1) / len(linkedin_urls) * 100)
-                progress_bar.progress(progress)
-                status_text.text(f"Processing {idx + 1} of {len(linkedin_urls)} profiles...")
+                        flat = flatten_json(result)
+                        filtered = {k: v for k, v in flat.items() if should_keep_field(k)}
+                        filtered["sourceUrl"] = url
+                        filtered["status"] = "✅ Success"
+                        results.append(filtered)
 
-        output_df = pd.DataFrame(results)
-        st.success("✅ Scraping completed!")
-        st.download_button("Download Results", data=output_df.to_csv(index=False),
-                           file_name="linkedin_scraped.csv", mime="text/csv")
-        st.dataframe(output_df.head(20))
+                    except Exception as e:
+                        results.append({"sourceUrl": url, "status": f"🛑 Error: {str(e)}"})
+
+                    time.sleep(DELAY_SEC)
+                    progress = int((idx + 1) / len(linkedin_urls) * 100)
+                    progress_bar.progress(progress)
+                    status_text.text(f"Processing {idx + 1} of {len(linkedin_urls)} profiles...")
+
+            output_df = pd.DataFrame(results)
+            st.success("✅ Scraping completed!")
+
+            st.download_button(
+                label="⬇️ Download Results as CSV",
+                data=output_df.to_csv(index=False),
+                file_name="linkedin_scraped.csv",
+                mime="text/csv"
+            )
+
+            st.subheader("📄 Preview")
+            st.dataframe(output_df.head(20))
