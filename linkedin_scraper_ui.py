@@ -6,20 +6,6 @@ import time
 API_KEY = st.secrets["API_KEY"]
 API_URL = "https://api.scrapin.io/enrichment/profile"
 DELAY_SEC = 0.25
-TARGET_FIELDS = [
-    'person.firstName', 'person.lastName', 'person.headline', 'person.location', 'person.summary',
-    'person.positions.positionsCount',
-    'person.positions.positionHistory[0].title',
-    'person.positions.positionHistory[0].companyName',
-    'person.positions.positionHistory[0].companyLocation',
-    'person.positions.positionHistory[0].description',
-    'person.positions.positionHistory[0].startEndDate.start.month',
-    'person.positions.positionHistory[0].startEndDate.start.year',
-    'person.positions.positionHistory[0].startEndDate.end',
-    'person.positions.positionHistory[0].companyLogo',
-    'person.positions.positionHistory[0].linkedInUrl',
-    'person.positions.positionHistory[0].linkedInId'
-]
 
 def flatten_json(y, prefix='', out=None):
     if out is None:
@@ -37,6 +23,18 @@ def flatten_json(y, prefix='', out=None):
         else:
             out[new_key] = v
     return out
+
+def should_keep_field(field):
+    return (
+        field.startswith("person.linkedin") or
+        field.startswith("person.firstName") or
+        field.startswith("person.lastName") or
+        field.startswith("person.headline") or
+        field.startswith("person.location") or
+        field.startswith("person.summary") or
+        field.startswith("person.positions") or
+        field.startswith("company")
+    )
 
 st.title("🔍 LinkedIn Profile Scraper (Batch)")
 st.markdown("Upload a CSV file with LinkedIn profile URLs in the first column.")
@@ -57,12 +55,20 @@ if uploaded_file:
                 try:
                     response = requests.get(API_URL, params={"apikey": API_KEY, "linkedInUrl": url})
                     result = response.json()
+
+                    # Check for API error or failure
+                    if not result.get("success", False):
+                        st.error(f"🚫 Scrapin API error: {result.get('message', 'Unknown error')}")
+                        st.stop()
+
                     flat = flatten_json(result)
-                    row = {field: flat.get(field, "") for field in TARGET_FIELDS}
-                    row['sourceUrl'] = url
-                    results.append(row)
+                    filtered = {k: v for k, v in flat.items() if should_keep_field(k)}
+                    filtered["sourceUrl"] = url
+                    filtered["status"] = "✅ Success"
+                    results.append(filtered)
+
                 except Exception as e:
-                    results.append({"sourceUrl": url, "error": str(e)})
+                    results.append({"sourceUrl": url, "status": f"🛑 Error: {str(e)}"})
                 time.sleep(DELAY_SEC)
                 progress = int((idx + 1) / len(linkedin_urls) * 100)
                 progress_bar.progress(progress)
