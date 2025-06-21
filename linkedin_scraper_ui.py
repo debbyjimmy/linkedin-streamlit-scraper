@@ -2,10 +2,11 @@ import streamlit as st
 import pandas as pd
 import requests
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 API_KEY = st.secrets["API_KEY"]
 API_URL = "https://api.scrapin.io/enrichment/profile"
-DELAY_SEC = 0.25
+MAX_WORKERS = 10
 
 def flatten_json(y, prefix='', out=None):
     if out is None:
@@ -36,6 +37,23 @@ def should_keep_field(field):
         field.startswith("company")
     )
 
+def scrape_profile(url):
+    try:
+        response = requests.get(API_URL, params={"apikey": API_KEY, "linkedInUrl": url})
+        result = response.json()
+
+        if not result.get("success", False):
+            return {"sourceUrl": url, "status": f"🚫 API Error: {result.get('message', 'Unknown error')}"}
+
+        flat = flatten_json(result)
+        filtered = {k: v for k, v in flat.items() if should_keep_field(k)}
+        filtered["sourceUrl"] = url
+        filtered["status"] = "✅ Success"
+        return filtered
+
+    except Exception as e:
+        return {"sourceUrl": url, "status": f"🛑 Error: {str(e)}"}
+
 st.title("🔍 LinkedIn Profile Scraper (Batch)")
 st.markdown("Upload a CSV file with LinkedIn profile URLs in the first column. Then click **Start Scraping**.")
 
@@ -49,38 +67,23 @@ if uploaded_file:
         linkedin_urls = df.iloc[:, 0].dropna().tolist()
         st.success(f"✅ Uploaded {len(linkedin_urls)} LinkedIn URLs.")
 
-        # Start scraping only when button is clicked
         if st.button("▶️ Start Scraping"):
             results = []
             progress_bar = st.progress(0)
             status_text = st.empty()
 
-            with st.spinner("Scraping profiles..."):
-                for idx, url in enumerate(linkedin_urls):
-                    try:
-                        response = requests.get(API_URL, params={"apikey": API_KEY, "linkedInUrl": url})
-                        result = response.json()
+            with st.spinner("⏳ Scraping profiles using parallel threads..."):
+                with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                    future_to_url = {executor.submit(scrape_profile, url): url for url in linkedin_urls}
+                    total = len(future_to_url)
+                    completed = 0
 
-                        if not result.get("success", False):
-                            results.append({
-                                "sourceUrl": url,
-                                "status": f"🚫 API Error: {result.get('message', 'Unknown error')}"
-                            })
-                            continue
-
-                        flat = flatten_json(result)
-                        filtered = {k: v for k, v in flat.items() if should_keep_field(k)}
-                        filtered["sourceUrl"] = url
-                        filtered["status"] = "✅ Success"
-                        results.append(filtered)
-
-                    except Exception as e:
-                        results.append({"sourceUrl": url, "status": f"🛑 Error: {str(e)}"})
-
-                    time.sleep(DELAY_SEC)
-                    progress = int((idx + 1) / len(linkedin_urls) * 100)
-                    progress_bar.progress(progress)
-                    status_text.text(f"Processing {idx + 1} of {len(linkedin_urls)} profiles...")
+                    for future in as_completed(future_to_url):
+                        results.append(future.result())
+                        completed += 1
+                        progress = int((completed / total) * 100)
+                        progress_bar.progress(progress)
+                        status_text.text(f"Processed {completed} of {total} profiles...")
 
             output_df = pd.DataFrame(results)
             st.success("✅ Scraping completed!")
