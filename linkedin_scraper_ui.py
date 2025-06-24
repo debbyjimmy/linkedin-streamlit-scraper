@@ -5,8 +5,34 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import zipfile
 import os
+import sys
+import json
 
-API_KEY = st.secrets["API_KEY"]
+def get_resource_path(relative_path):
+    try:
+        # When running from PyInstaller .exe
+        base_path = sys._MEIPASS
+    except AttributeError:
+        # When running normally (dev mode)
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+
+def load_config():
+    try:
+        # When bundled as .exe (PyInstaller)
+        base_path = sys._MEIPASS
+        config_path = os.path.join(base_path, "config.json")
+    except AttributeError:
+        # When running in dev mode (e.g., streamlit run app.py)
+        # Go one level up from current file
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(script_dir, "config.json")
+
+    with open(config_path, "r") as f:
+        return json.load(f)
+
+API_KEY = load_config()["API_KEY"]
 API_URL = "https://api.scrapin.io/enrichment/profile"
 MAX_WORKERS = 10
 BATCH_SIZE = 50
