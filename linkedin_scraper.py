@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 API_URL = "https://api.scrapin.io/enrichment/profile"
 MAX_WORKERS = 10
+MAX_RETRIES = 3
+INITIAL_BACKOFF = 1
 
 def load_config():
     with open("config.json", "r") as f:
@@ -42,19 +44,38 @@ def should_keep_field(field):
         field.startswith("company")
     )
 
-def scrape_profile(url, apikey):
-    try:
-        response = requests.get(API_URL, params={"apikey": apikey, "linkedInUrl": url})
-        result = response.json()
-        if not result.get("success", False):
-            return {"sourceUrl": url, "status": f"API Error: {result.get('message', '')}"}
-        flat = flatten_json(result)
-        filtered = {k: v for k, v in flat.items() if should_keep_field(k)}
-        filtered["sourceUrl"] = url
-        filtered["status"] = "Success"
-        return filtered
-    except Exception as e:
-        return {"sourceUrl": url, "status": f"Error: {str(e)}"}
+def scrape_profile(url, apikey, retries=MAX_RETRIES, backoff=INITIAL_BACKOFF):
+    for attempt in range(1, retries + 1):
+        try:
+            response = requests.get(API_URL, params={"apikey": apikey, "linkedInUrl": url})
+            response.raise_for_status()
+
+            result = response.json()
+            if not result.get("success", False):
+                error_msg = result.get("message") or result.get("error") or "Unknown API error"
+                raise ValueError(f"API Error: {error_msg}")
+
+            flat = flatten_json(result)
+            filtered = {k: v for k, v in flat.items() if should_keep_field(k)}
+            filtered["sourceUrl"] = url
+            filtered["status"] = "Success"
+            return filtered
+
+        except (requests.exceptions.HTTPError, ValueError) as e:
+            # Only retry for 5xx errors
+            if isinstance(e, requests.exceptions.HTTPError):
+                status = response.status_code
+            else:
+                status = 500
+
+            if attempt == retries or not (500 <= status < 600):
+                return {"sourceUrl": url, "status": f"{type(e).__name__}: {str(e)}"}
+            else:
+                time.sleep(backoff)
+                backoff *= 2  # exponential backoff
+
+        except Exception as e:
+            return {"sourceUrl": url, "status": f"Error: {str(e)}"}
 
 def batch_scrape(input_file, output_file, shutdown=False, batch_index=None):
     config = load_config()
@@ -63,10 +84,8 @@ def batch_scrape(input_file, output_file, shutdown=False, batch_index=None):
     df = pd.read_csv(input_file)
     urls = df.iloc[:, 0].dropna().tolist()
 
-    if batch_index:
-        print(f"[Batch {batch_index}] Starting batch of {len(urls)} records")
-    else:
-        print(f"Starting batch of {len(urls)} records")
+    batch_label = f"[Batch {batch_index}]" if batch_index else "[Batch]"
+    print(f"{batch_label} Starting batch of {len(urls)} records")
 
     results = []
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -76,8 +95,16 @@ def batch_scrape(input_file, output_file, shutdown=False, batch_index=None):
             results.append(result)
             print(f"[{i}/{len(urls)}] {result['sourceUrl']} → {result['status']}")
 
+    # Save all results
     pd.DataFrame(results).to_csv(output_file, index=False)
     print(f"\n✅ Done. Output saved to {output_file}")
+
+    # Save failed ones
+    failures = [r for r in results if r["status"] != "Success"]
+    if failures:
+        failure_file = output_file.replace("result_", "failures_")
+        pd.DataFrame(failures).to_csv(failure_file, index=False)
+        print(f"⚠️  Saved {len(failures)} failures to {failure_file}")
 
     if shutdown:
         print("Shutting down machine...")
