@@ -17,11 +17,11 @@ if st.secrets.get("GCP_CREDENTIALS"):
 else:
     client = storage.Client()
 
-# Bucket and config
+# Bucket setup
 bucket_name = st.secrets["BUCKET_NAME"]
 bucket = client.bucket(bucket_name)
 
-# Upload input CSV
+# File upload
 uploaded_file = st.file_uploader("Upload full LinkedIn CSV to split and scrape", type=["csv"])
 num_chunks = st.number_input("Number of chunks", min_value=1, max_value=100, value=4)
 
@@ -53,20 +53,17 @@ if uploaded_file:
             st.success(f"Uploaded chunk: {filename} ({len(chunk_df)} rows)")
         st.balloons()
 
+    # Launch VMs using template
     def launch_vm(vm_name, zone="us-central1-a", template="scraper-template-v4"):
         st.write(f"⏳ Creating VM: {vm_name}...")
         compute = discovery.build("compute", "v1", credentials=credentials)
         project = credentials.project_id
-        request_body = {
-            "name": vm_name,
-            "sourceInstanceTemplate": f"global/instanceTemplates/{template}"
-        }
-        response = compute.instances().insert(
+        return compute.instances().insert(
             project=project,
             zone=zone,
-            body=request_body
+            body={"name": vm_name},
+            sourceInstanceTemplate=f"projects/{project}/global/instanceTemplates/{template}"
         ).execute()
-        return response
 
     if st.button("Start Scraping"):
         st.info("Launching scraper VMs using saved template...")
@@ -78,37 +75,24 @@ if uploaded_file:
             except Exception as e:
                 st.error(f"❌ Failed to launch {vm_name}: {e}")
 
-# Monitor scraping progress
-st.header("📝 Scraping Progress and Logs")
+# Monitor progress
 log_blobs = list(bucket.list_blobs(prefix="results/logs/"))
 log_files = [blob for blob in log_blobs if blob.name.endswith(".txt")]
 completed_chunks = len(log_files)
 progress = int((completed_chunks / num_chunks) * 100)
 st.progress(progress, text=f"{completed_chunks}/{num_chunks} chunks completed")
 
-all_logs = {}
-for blob in sorted(log_files):
-    content = blob.download_as_text().strip().splitlines()
-    all_logs[blob.name] = content[-2:]
-
-for name, lines in all_logs.items():
-    st.subheader(f"📄 {name}")
-    st.text("\n".join(lines))
-
-# Auto-merge when all logs are in
+# Auto-merge results once all logs are in
 merge_success = False
 if completed_chunks == num_chunks:
-    if not os.path.exists("ALL_SUCCESS.csv") or not os.path.exists("ALL_FAILURES.csv"):
-        os.system("python3 merge_results.py")
-        for file_name in ["ALL_SUCCESS.csv", "ALL_FAILURES.csv"]:
-            if os.path.exists(file_name):
-                blob = bucket.blob(f"results/{file_name}")
-                blob.upload_from_filename(file_name)
-        merge_success = True
-    else:
-        merge_success = True
+    os.system("python3 merge_results.py")
+    for file_name in ["ALL_SUCCESS.csv", "ALL_FAILURES.csv"]:
+        if os.path.exists(file_name):
+            blob = bucket.blob(f"results/{file_name}")
+            blob.upload_from_filename(file_name)
+    merge_success = True
 
-# Show download links if merged
+# Final download section
 if merge_success:
     st.success("✅ Merge completed. You can now download your results.")
     for file_name in ["ALL_SUCCESS.csv", "ALL_FAILURES.csv"]:
@@ -117,3 +101,6 @@ if merge_success:
             blob.download_to_filename(file_name)
             with open(file_name, "rb") as f:
                 st.download_button(f"⬇️ Download {file_name}", f, file_name=file_name)
+
+st.markdown("---")
+st.write("Powered by GeoRAD Solutions.")
