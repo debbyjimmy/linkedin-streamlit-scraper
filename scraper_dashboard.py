@@ -4,7 +4,6 @@ import os
 import json
 from google.cloud import storage
 from google.oauth2 import service_account
-from googleapiclient import discovery
 
 st.set_page_config(page_title="Contact Scraper Dashboard")
 st.title("📇 Contact Scraper Dashboard")
@@ -65,31 +64,9 @@ if uploaded_file:
             blob = bucket.blob(f"chunks/{filename}")
             blob.upload_from_filename(filename)
             st.success(f"✅ Uploaded chunk: {filename} ({len(chunk_df)} rows)")
+
         st.balloons()
-
-    def launch_vm(vm_name, zone="us-central1-a", template="scraper-template-v4"):
-        st.write(f"⏳ Creating VM: {vm_name}...")
-        compute = discovery.build("compute", "v1", credentials=credentials)
-        project = credentials.project_id
-        request_body = {
-            "name": vm_name,
-            "sourceInstanceTemplate": f"projects/{project}/global/instanceTemplates/{template}"
-        }
-        return compute.instances().insert(
-            project=project,
-            zone=zone,
-            body=request_body
-        ).execute()
-
-    if st.button("Start Scraping"):
-        st.info("🚀 Launching scraper VMs using saved template...")
-        for i in range(1, num_chunks + 1):
-            vm_name = f"scraper-vm-{i}"
-            try:
-                launch_vm(vm_name)
-                st.success(f"✅ Launched {vm_name}")
-            except Exception as e:
-                st.error(f"❌ Failed to launch {vm_name}: {e}")
+        st.success("🚀 All chunks uploaded. Scraping has now started automatically.")
 
 # Progress monitoring
 st.header("📊 Scraping Progress")
