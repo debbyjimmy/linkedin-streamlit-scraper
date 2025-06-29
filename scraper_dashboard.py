@@ -73,7 +73,7 @@ if uploaded_file:
         project = credentials.project_id
         request_body = {
             "name": vm_name,
-            "sourceInstanceTemplate": f"global/instanceTemplates/{template}"
+            "sourceInstanceTemplate": f"projects/{project}/global/instanceTemplates/{template}"
         }
         return compute.instances().insert(
             project=project,
