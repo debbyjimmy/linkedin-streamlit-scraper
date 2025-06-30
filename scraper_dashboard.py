@@ -9,7 +9,7 @@ from google.oauth2 import service_account
 st.set_page_config(page_title="Contact Scraper Dashboard")
 st.title("📇 Contact Scraper Dashboard")
 
-# Initialize GCS client
+# --- GCS Client Setup ---
 if st.secrets.get("GCP_CREDENTIALS"):
     credentials_info = json.loads(st.secrets["GCP_CREDENTIALS"])
     credentials = service_account.Credentials.from_service_account_info(credentials_info)
@@ -20,7 +20,7 @@ else:
 bucket_name = st.secrets["BUCKET_NAME"]
 bucket = client.bucket(bucket_name)
 
-# Upload input CSV
+# --- Upload + Split CSV ---
 uploaded_file = st.file_uploader("Upload full LinkedIn CSV to split and scrape", type=["csv"])
 num_chunks = st.number_input("Number of chunks", min_value=1, max_value=100, value=4)
 
@@ -31,12 +31,24 @@ if uploaded_file:
     if st.button("Split and Upload Chunks"):
         st.info("🧹 Clearing previous chunks, logs, and merged results...")
 
-        # Clear old files
-        for prefix in ["chunks/", "results/logs/", "results/ALL_SUCCESS.csv", "results/ALL_FAILURES.csv"]:
-            blobs = list(bucket.list_blobs(prefix=prefix if prefix.endswith("/") else ""))
-            for blob in blobs:
+        # --- SAFE DELETE ---
+        # Clear only expected chunk files
+        for blob in bucket.list_blobs(prefix="chunks/"):
+            if blob.name.endswith(".csv") and "chunk_" in blob.name:
                 blob.delete()
 
+        # Clear only known log files
+        for blob in bucket.list_blobs(prefix="results/logs/"):
+            if blob.name.endswith(".txt") and "log_" in blob.name:
+                blob.delete()
+
+        # Clear only the known merged files
+        for filename in ["results/ALL_SUCCESS.csv", "results/ALL_FAILURES.csv"]:
+            blob = bucket.blob(filename)
+            if blob.exists():
+                blob.delete()
+
+        # Upload new chunks
         st.info("📤 Splitting CSV and uploading new chunks...")
         chunk_size = -(-len(input_df) // num_chunks)
         os.makedirs("chunks", exist_ok=True)
@@ -55,9 +67,8 @@ if uploaded_file:
         st.balloons()
         st.success("🚀 All chunks uploaded. Scraping has now started automatically.")
 
-# --- Real-time progress monitor ---
+# --- Progress Monitoring with Auto Refresh ---
 st.header("📊 Scraping Progress")
-
 progress_placeholder = st.empty()
 status_text = st.empty()
 
@@ -66,7 +77,7 @@ def count_completed_chunks():
     return len([blob for blob in log_blobs if blob.name.endswith(".txt")])
 
 completed_chunks = 0
-for _ in range(60):  # Check progress for up to 5 minutes
+for _ in range(60):  # 5 minutes max (60 × 5s)
     completed_chunks = count_completed_chunks()
     progress = int((completed_chunks / num_chunks) * 100)
     progress_placeholder.progress(progress, text=f"{completed_chunks}/{num_chunks} chunks completed")
@@ -76,7 +87,7 @@ for _ in range(60):  # Check progress for up to 5 minutes
         break
     time.sleep(5)
 
-# --- Auto-merge logic ---
+# --- Merge Results ---
 def download_csv_files(prefix):
     blobs = list(bucket.list_blobs(prefix=prefix))
     files = []
@@ -88,10 +99,7 @@ def download_csv_files(prefix):
     return files
 
 def merge_csvs(files, pattern):
-    dfs = []
-    for file in files:
-        if pattern in os.path.basename(file):
-            dfs.append(pd.read_csv(file))
+    dfs = [pd.read_csv(file) for file in files if pattern in os.path.basename(file)]
     return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
 
 def upload_to_bucket(local_path, dest_name):
@@ -117,7 +125,7 @@ if completed_chunks == num_chunks:
 
     merge_success = True
 
-# --- Download section ---
+# --- Download Buttons ---
 if merge_success:
     st.success("🎉 Merge completed. You can now download your results:")
     for fname in ["ALL_SUCCESS.csv", "ALL_FAILURES.csv"]:
