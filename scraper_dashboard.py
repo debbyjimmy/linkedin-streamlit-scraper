@@ -2,12 +2,16 @@ import streamlit as st
 import pandas as pd
 import os
 import json
-import time
+from time import sleep
 from google.cloud import storage
 from google.oauth2 import service_account
+from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="Contact Scraper Dashboard")
 st.title("📇 Contact Scraper Dashboard")
+
+# 🔄 Auto-refresh every 5 seconds
+st_autorefresh(interval=5000, limit=None, key="auto_refresh")
 
 # --- GCS Client Setup ---
 if st.secrets.get("GCP_CREDENTIALS"):
@@ -64,26 +68,16 @@ if uploaded_file:
         st.balloons()
         st.success("🚀 All chunks uploaded. Scraping has now started automatically.")
 
-# --- Progress Monitoring with Auto Refresh ---
+# --- Progress Monitoring ---
 st.header("📊 Scraping Progress")
-
-if "last_check_time" not in st.session_state:
-    st.session_state.last_check_time = time.time()
 
 def count_completed_chunks():
     log_blobs = list(bucket.list_blobs(prefix="results/logs/"))
     return len([blob for blob in log_blobs if blob.name.endswith(".txt")])
 
 completed_chunks = count_completed_chunks()
-progress = int((completed_chunks / num_chunks) * 100)
-st.progress(progress, text=f"{completed_chunks}/{num_chunks} chunks completed")
-
-if completed_chunks < num_chunks:
-    if time.time() - st.session_state.last_check_time > 5:
-        st.session_state.last_check_time = time.time()
-        st.experimental_rerun()
-else:
-    st.success("✅ All chunks processed.")
+progress = int((completed_chunks / num_chunks) * 100) if num_chunks else 0
+st.progress(progress, text=f"{completed_chunks}/{int(num_chunks)} chunks completed")
 
 # --- Merge Results ---
 def download_csv_files(prefix):
@@ -104,22 +98,27 @@ def upload_to_bucket(local_path, dest_name):
     blob = bucket.blob(dest_name)
     blob.upload_from_filename(local_path)
 
+# Check if results already exist
 merge_success = False
+all_success_blob = bucket.blob("results/ALL_SUCCESS.csv")
+all_failures_blob = bucket.blob("results/ALL_FAILURES.csv")
+
 if completed_chunks == num_chunks:
-    st.info("🔀 Merging results...")
-    files = download_csv_files("results/")
-    success_df = merge_csvs(files, "result_")
-    failure_df = merge_csvs(files, "failures_")
+    if not (all_success_blob.exists() and all_failures_blob.exists()):
+        st.info("🔀 Merging results...")
+        files = download_csv_files("results/")
+        success_df = merge_csvs(files, "result_")
+        failure_df = merge_csvs(files, "failures_")
 
-    if not success_df.empty:
-        success_path = "/tmp/ALL_SUCCESS.csv"
-        success_df.to_csv(success_path, index=False)
-        upload_to_bucket(success_path, "results/ALL_SUCCESS.csv")
+        if not success_df.empty:
+            success_path = "/tmp/ALL_SUCCESS.csv"
+            success_df.to_csv(success_path, index=False)
+            upload_to_bucket(success_path, "results/ALL_SUCCESS.csv")
 
-    if not failure_df.empty:
-        failure_path = "/tmp/ALL_FAILURES.csv"
-        failure_df.to_csv(failure_path, index=False)
-        upload_to_bucket(failure_path, "results/ALL_FAILURES.csv")
+        if not failure_df.empty:
+            failure_path = "/tmp/ALL_FAILURES.csv"
+            failure_df.to_csv(failure_path, index=False)
+            upload_to_bucket(failure_path, "results/ALL_FAILURES.csv")
 
     merge_success = True
 
