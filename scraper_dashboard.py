@@ -32,17 +32,14 @@ if uploaded_file:
         st.info("🧹 Clearing previous chunks, logs, and merged results...")
 
         # --- SAFE DELETE ---
-        # Clear only expected chunk files
         for blob in bucket.list_blobs(prefix="chunks/"):
             if blob.name.endswith(".csv") and "chunk_" in blob.name:
                 blob.delete()
 
-        # Clear only known log files
         for blob in bucket.list_blobs(prefix="results/logs/"):
             if blob.name.endswith(".txt") and "log_" in blob.name:
                 blob.delete()
 
-        # Clear only the known merged files
         for filename in ["results/ALL_SUCCESS.csv", "results/ALL_FAILURES.csv"]:
             blob = bucket.blob(filename)
             if blob.exists():
@@ -69,23 +66,24 @@ if uploaded_file:
 
 # --- Progress Monitoring with Auto Refresh ---
 st.header("📊 Scraping Progress")
-progress_placeholder = st.empty()
-status_text = st.empty()
+
+if "last_check_time" not in st.session_state:
+    st.session_state.last_check_time = time.time()
 
 def count_completed_chunks():
     log_blobs = list(bucket.list_blobs(prefix="results/logs/"))
     return len([blob for blob in log_blobs if blob.name.endswith(".txt")])
 
-completed_chunks = 0
-for _ in range(60):  # 5 minutes max (60 × 5s)
-    completed_chunks = count_completed_chunks()
-    progress = int((completed_chunks / num_chunks) * 100)
-    progress_placeholder.progress(progress, text=f"{completed_chunks}/{num_chunks} chunks completed")
+completed_chunks = count_completed_chunks()
+progress = int((completed_chunks / num_chunks) * 100)
+st.progress(progress, text=f"{completed_chunks}/{num_chunks} chunks completed")
 
-    if completed_chunks >= num_chunks:
-        status_text.success("✅ All chunks processed.")
-        break
-    time.sleep(5)
+if completed_chunks < num_chunks:
+    if time.time() - st.session_state.last_check_time > 5:
+        st.session_state.last_check_time = time.time()
+        st.experimental_rerun()
+else:
+    st.success("✅ All chunks processed.")
 
 # --- Merge Results ---
 def download_csv_files(prefix):
