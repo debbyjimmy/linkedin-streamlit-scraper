@@ -1,3 +1,4 @@
+# scraper.py
 import argparse
 import pandas as pd
 import requests
@@ -7,9 +8,10 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 API_URL = "https://api.scrapin.io/enrichment/profile"
-MAX_WORKERS = 10
+MAX_WORKERS = 5             # reduced from 10
 MAX_RETRIES = 3
 INITIAL_BACKOFF = 1
+PER_REQUEST_DELAY = 1       # throttle delay (in seconds)
 
 def load_config():
     with open("config.json", "r") as f:
@@ -45,9 +47,16 @@ def should_keep_field(field):
     )
 
 def scrape_profile(url, apikey, retries=MAX_RETRIES, backoff=INITIAL_BACKOFF):
+    time.sleep(PER_REQUEST_DELAY)  # throttle to avoid hitting global rate limit
+
     for attempt in range(1, retries + 1):
         try:
             response = requests.get(API_URL, params={"apikey": apikey, "linkedInUrl": url})
+            if response.status_code == 429:
+                print(f"Rate limit hit (429). Sleeping for 60 seconds...")
+                time.sleep(60)
+                continue
+
             response.raise_for_status()
 
             result = response.json()
@@ -62,17 +71,13 @@ def scrape_profile(url, apikey, retries=MAX_RETRIES, backoff=INITIAL_BACKOFF):
             return filtered
 
         except (requests.exceptions.HTTPError, ValueError) as e:
-            # Only retry for 5xx errors
-            if isinstance(e, requests.exceptions.HTTPError):
-                status = response.status_code
-            else:
-                status = 500
+            status = getattr(response, 'status_code', 500)
 
             if attempt == retries or not (500 <= status < 600):
                 return {"sourceUrl": url, "status": f"{type(e).__name__}: {str(e)}"}
             else:
                 time.sleep(backoff)
-                backoff *= 2  # exponential backoff
+                backoff *= 2
 
         except Exception as e:
             return {"sourceUrl": url, "status": f"Error: {str(e)}"}
@@ -95,11 +100,9 @@ def batch_scrape(input_file, output_file, shutdown=False, batch_index=None):
             results.append(result)
             print(f"[{i}/{len(urls)}] {result['sourceUrl']} → {result['status']}")
 
-    # Save all results
     pd.DataFrame(results).to_csv(output_file, index=False)
     print(f"\n✅ Done. Output saved to {output_file}")
 
-    # Save failed ones
     failures = [r for r in results if r["status"] != "Success"]
     if failures:
         failure_file = output_file.replace("result_", "failures_")

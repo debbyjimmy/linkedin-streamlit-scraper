@@ -2,16 +2,14 @@ import streamlit as st
 import pandas as pd
 import os
 import json
-from time import sleep
+import time
+import uuid
+import subprocess
 from google.cloud import storage
 from google.oauth2 import service_account
-from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="Contact Scraper Dashboard")
 st.title("📇 Contact Scraper Dashboard")
-
-# 🔄 Auto-refresh every 5 seconds
-st_autorefresh(interval=5000, limit=None, key="auto_refresh")
 
 # --- GCS Client Setup ---
 if st.secrets.get("GCP_CREDENTIALS"):
@@ -24,6 +22,13 @@ else:
 bucket_name = st.secrets["BUCKET_NAME"]
 bucket = client.bucket(bucket_name)
 
+# --- Generate Session UUID ---
+run_id = st.session_state.get("run_id")
+if not run_id:
+    run_id = str(uuid.uuid4())[:8]
+    st.session_state["run_id"] = run_id
+st.markdown(f"**Session ID:** `{run_id}`")
+
 # --- Upload + Split CSV ---
 uploaded_file = st.file_uploader("Upload full LinkedIn CSV to split and scrape", type=["csv"])
 num_chunks = st.number_input("Number of chunks", min_value=1, max_value=100, value=4)
@@ -32,21 +37,19 @@ if uploaded_file:
     input_df = pd.read_csv(uploaded_file)
     st.write(f"✅ Dataframe loaded: {len(input_df)} rows")
 
-    if st.button("Split and Upload Chunks"):
-        st.info("🧹 Clearing previous chunks, logs, and merged results...")
+    if st.button("Split, Upload & Launch Scraping"):
+        st.info("🧹 Clearing previous session files...")
 
         # --- SAFE DELETE ---
-        for blob in bucket.list_blobs(prefix="chunks/"):
-            if blob.name.endswith(".csv") and "chunk_" in blob.name:
-                blob.delete()
-
-        for blob in bucket.list_blobs(prefix="results/logs/"):
-            if blob.name.endswith(".txt") and "log_" in blob.name:
-                blob.delete()
-
-        for filename in ["results/ALL_SUCCESS.csv", "results/ALL_FAILURES.csv"]:
-            blob = bucket.blob(filename)
-            if blob.exists():
+        # Clear user-specific files
+        for prefix in [
+            f"users/{run_id}/chunks/",
+            f"users/{run_id}/results/logs/",
+            f"users/{run_id}/results/ALL_SUCCESS.csv",
+            f"users/{run_id}/results/ALL_FAILURES.csv"
+        ]:
+            blobs = list(bucket.list_blobs(prefix=prefix if prefix.endswith("/") else ""))
+            for blob in blobs:
                 blob.delete()
 
         # Upload new chunks
@@ -61,23 +64,40 @@ if uploaded_file:
             if not chunk_df.empty:
                 filename = f"chunk_{i + 1}.csv"
                 chunk_df.to_csv(filename, index=False)
-                blob = bucket.blob(f"chunks/{filename}")
+                blob = bucket.blob(f"users/{run_id}/chunks/{filename}")
                 blob.upload_from_filename(filename)
                 st.success(f"✅ Uploaded chunk: {filename} ({len(chunk_df)} rows)")
 
         st.balloons()
-        st.success("🚀 All chunks uploaded. Scraping has now started automatically.")
+        st.success("🚀 All chunks uploaded. Launching scraper...")
 
-# --- Progress Monitoring ---
+        # Launch controller watcher with run_id
+        try:
+            subprocess.run(["gcloud", "compute", "ssh", "controller-vm",
+                            "--command", f"bash ~/watch_and_launch.sh {run_id}"], check=True)
+            st.success("🧠 Watcher launched for scraping.")
+        except Exception as e:
+            st.error(f"❌ Failed to start watcher: {e}")
+
+# --- Progress Monitoring with Auto Refresh ---
 st.header("📊 Scraping Progress")
+progress_placeholder = st.empty()
+status_text = st.empty()
 
 def count_completed_chunks():
-    log_blobs = list(bucket.list_blobs(prefix="results/logs/"))
-    return len([blob for blob in log_blobs if blob.name.endswith(".txt")])
+    result_blobs = list(bucket.list_blobs(prefix=f"users/{run_id}/results/"))
+    return len([b for b in result_blobs if b.name.endswith(".csv") and "result_" in b.name])
 
-completed_chunks = count_completed_chunks()
-progress = int((completed_chunks / num_chunks) * 100) if num_chunks else 0
-st.progress(progress, text=f"{completed_chunks}/{int(num_chunks)} chunks completed")
+completed_chunks = 0
+for _ in range(60):  # 5 minutes max (60 × 5s)
+    completed_chunks = count_completed_chunks()
+    progress = int((completed_chunks / num_chunks) * 100)
+    progress_placeholder.progress(progress, text=f"{completed_chunks}/{num_chunks} chunks completed")
+
+    if completed_chunks >= num_chunks:
+        status_text.success("✅ All chunks processed.")
+        break
+    time.sleep(5)
 
 # --- Merge Results ---
 def download_csv_files(prefix):
@@ -98,27 +118,22 @@ def upload_to_bucket(local_path, dest_name):
     blob = bucket.blob(dest_name)
     blob.upload_from_filename(local_path)
 
-# Check if results already exist
 merge_success = False
-all_success_blob = bucket.blob("results/ALL_SUCCESS.csv")
-all_failures_blob = bucket.blob("results/ALL_FAILURES.csv")
-
 if completed_chunks == num_chunks:
-    if not (all_success_blob.exists() and all_failures_blob.exists()):
-        st.info("🔀 Merging results...")
-        files = download_csv_files("results/")
-        success_df = merge_csvs(files, "result_")
-        failure_df = merge_csvs(files, "failures_")
+    st.info("🔀 Merging results...")
+    files = download_csv_files(f"users/{run_id}/results/")
+    success_df = merge_csvs(files, "result_")
+    failure_df = merge_csvs(files, "failures_")
 
-        if not success_df.empty:
-            success_path = "/tmp/ALL_SUCCESS.csv"
-            success_df.to_csv(success_path, index=False)
-            upload_to_bucket(success_path, "results/ALL_SUCCESS.csv")
+    if not success_df.empty:
+        success_path = "/tmp/ALL_SUCCESS.csv"
+        success_df.to_csv(success_path, index=False)
+        upload_to_bucket(success_path, f"users/{run_id}/results/ALL_SUCCESS.csv")
 
-        if not failure_df.empty:
-            failure_path = "/tmp/ALL_FAILURES.csv"
-            failure_df.to_csv(failure_path, index=False)
-            upload_to_bucket(failure_path, "results/ALL_FAILURES.csv")
+    if not failure_df.empty:
+        failure_path = "/tmp/ALL_FAILURES.csv"
+        failure_df.to_csv(failure_path, index=False)
+        upload_to_bucket(failure_path, f"users/{run_id}/results/ALL_FAILURES.csv")
 
     merge_success = True
 
@@ -126,7 +141,7 @@ if completed_chunks == num_chunks:
 if merge_success:
     st.success("🎉 Merge completed. You can now download your results:")
     for fname in ["ALL_SUCCESS.csv", "ALL_FAILURES.csv"]:
-        blob = bucket.blob(f"results/{fname}")
+        blob = bucket.blob(f"users/{run_id}/results/{fname}")
         local_path = f"/tmp/{fname}"
         if blob.exists():
             blob.download_to_filename(local_path)
