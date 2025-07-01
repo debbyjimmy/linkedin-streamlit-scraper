@@ -4,7 +4,7 @@ BUCKET="contact-scraper-bucket"
 ZONE="us-central1-a"
 TEMPLATE="scraper-template-v4"
 PROJECT="contact-scraper-463913"
-RUN_ID="$1"  # UUID passed as first argument
+RUN_ID="$1"  # UUID passed as first arg
 
 if [[ -z "$RUN_ID" ]]; then
   echo "❌ No RUN_ID provided. Usage: ./watch_and_launch.sh <run_id>"

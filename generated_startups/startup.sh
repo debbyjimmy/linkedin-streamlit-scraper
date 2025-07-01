@@ -5,7 +5,7 @@ echo "📦 Startup script begins..."
 
 BUCKET="contact-scraper-bucket"
 
-# Metadata
+# Metadat
 VM_NAME=$(curl -s -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/name)
 CHUNK_INDEX=$(echo $VM_NAME | grep -o '[0-9]\+$')
 ZONE=$(curl -s -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/zone | awk -F/ '{print $NF}')

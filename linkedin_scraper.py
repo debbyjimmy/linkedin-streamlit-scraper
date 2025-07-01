@@ -8,8 +8,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 API_URL = "https://api.scrapin.io/enrichment/profile"
-MAX_WORKERS = 5             # reduced from 10
-MAX_RETRIES = 3
+MAX_WORKERS = 5           # reduced from 10
+MAX_RETRIES = 2
 INITIAL_BACKOFF = 1
 PER_REQUEST_DELAY = 1       # throttle delay (in seconds)
 
