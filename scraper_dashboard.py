@@ -31,7 +31,7 @@ st.markdown(f"**Session ID:** `{run_id}`")
 
 # --- Upload + Split CSV ---
 uploaded_file = st.file_uploader("Upload full LinkedIn CSV to split and scrape", type=["csv"])
-num_chunks = st.number_input("Number of chunks", min_value=1, max_value=100, value=4)
+num_chunks = 4
 
 if uploaded_file:
     input_df = pd.read_csv(uploaded_file)
