@@ -4,7 +4,7 @@ import os
 import json
 import time
 import uuid
-import subprocess
+import shutil
 from google.cloud import storage
 from google.oauth2 import service_account
 
@@ -31,54 +31,47 @@ st.markdown(f"**Session ID:** `{run_id}`")
 
 # --- Upload + Split CSV ---
 uploaded_file = st.file_uploader("Upload full LinkedIn CSV to split and scrape", type=["csv"])
-num_chunks = 4  # fixed chunk count
+num_chunks = 4  # fixed
 
 if uploaded_file:
     input_df = pd.read_csv(uploaded_file)
     st.write(f"✅ Dataframe loaded: {len(input_df)} rows")
 
-    if st.button("Split, Upload & Launch Scraping"):
+    # Estimate time per chunk (assumes 5 threads per VM, ~200 reqs/min globally)
+    rows_per_chunk = -(-len(input_df) // num_chunks)
+    est_time_per_chunk_min = rows_per_chunk / 200
+    st.info(f"⏱️ Estimated processing time: ~{int(est_time_per_chunk_min)} minutes per chunk")
+
+    if st.button("Split & Upload"):
         st.info("🧹 Clearing previous session files...")
 
-        # --- SAFE DELETE (session-specific only) ---
-        prefixes_to_clear = [
-            f"users/{run_id}/chunks/",
-            f"users/{run_id}/results/"
-        ]
-
-        for prefix in prefixes_to_clear:
+        # SAFE DELETE (only user session files)
+        for prefix in [f"users/{run_id}/chunks/", f"users/{run_id}/results/"]:
             if not prefix.startswith(f"users/{run_id}/"):
                 raise ValueError("Unsafe delete prefix detected — aborting.")
             blobs = list(bucket.list_blobs(prefix=prefix))
             for blob in blobs:
                 blob.delete()
 
-        # Upload new chunks
         st.info("📤 Splitting CSV and uploading new chunks...")
-        chunk_size = -(-len(input_df) // num_chunks)
         os.makedirs("chunks", exist_ok=True)
 
         for i in range(num_chunks):
-            start = i * chunk_size
-            end = min((i + 1) * chunk_size, len(input_df))
+            start = i * rows_per_chunk
+            end = min((i + 1) * rows_per_chunk, len(input_df))
             chunk_df = input_df.iloc[start:end]
             if not chunk_df.empty:
                 filename = f"chunk_{i + 1}.csv"
-                chunk_df.to_csv(filename, index=False)
+                path = os.path.join("chunks", filename)
+                chunk_df.to_csv(path, index=False)
                 blob = bucket.blob(f"users/{run_id}/chunks/{filename}")
-                blob.upload_from_filename(filename)
+                blob.upload_from_filename(path)
                 st.success(f"✅ Uploaded chunk: {filename} ({len(chunk_df)} rows)")
+                os.remove(path)
 
+        shutil.rmtree("chunks", ignore_errors=True)
         st.balloons()
-        st.success("🚀 All chunks uploaded. Launching scraper...")
-
-        # Launch controller watcher with run_id
-        try:
-            subprocess.run(["gcloud", "compute", "ssh", "controller-vm",
-                            "--command", f"bash ~/watch_and_launch.sh {run_id}"], check=True)
-            st.success("🧠 Watcher launched for scraping.")
-        except Exception as e:
-            st.error(f"❌ Failed to start watcher: {e}")
+        st.success("🚀 All chunks uploaded. Scraping will start automatically.")
 
 # --- Progress Monitoring with Auto Refresh ---
 st.header("📊 Scraping Progress")
