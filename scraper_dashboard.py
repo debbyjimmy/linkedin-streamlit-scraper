@@ -149,4 +149,4 @@ if merge_success:
                 st.download_button(f"⬇️ Download {fname}", f, file_name=fname)
 
 st.markdown("---")
-st.caption("Powered by eCore Services.")
+st.caption("@Edebo 2025.")
