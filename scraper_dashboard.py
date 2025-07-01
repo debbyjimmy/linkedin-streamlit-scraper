@@ -31,7 +31,7 @@ st.markdown(f"**Session ID:** `{run_id}`")
 
 # --- Upload + Split CSV ---
 uploaded_file = st.file_uploader("Upload full LinkedIn CSV to split and scrape", type=["csv"])
-num_chunks = 4
+num_chunks = 4  # fixed chunk count
 
 if uploaded_file:
     input_df = pd.read_csv(uploaded_file)
@@ -40,15 +40,16 @@ if uploaded_file:
     if st.button("Split, Upload & Launch Scraping"):
         st.info("🧹 Clearing previous session files...")
 
-        # --- SAFE DELETE ---
-        # Clear user-specific files
-        for prefix in [
+        # --- SAFE DELETE (session-specific only) ---
+        prefixes_to_clear = [
             f"users/{run_id}/chunks/",
-            f"users/{run_id}/results/logs/",
-            f"users/{run_id}/results/ALL_SUCCESS.csv",
-            f"users/{run_id}/results/ALL_FAILURES.csv"
-        ]:
-            blobs = list(bucket.list_blobs(prefix=prefix if prefix.endswith("/") else ""))
+            f"users/{run_id}/results/"
+        ]
+
+        for prefix in prefixes_to_clear:
+            if not prefix.startswith(f"users/{run_id}/"):
+                raise ValueError("Unsafe delete prefix detected — aborting.")
+            blobs = list(bucket.list_blobs(prefix=prefix))
             for blob in blobs:
                 blob.delete()
 
@@ -149,4 +150,4 @@ if merge_success:
                 st.download_button(f"⬇️ Download {fname}", f, file_name=fname)
 
 st.markdown("---")
-st.caption(" Powered by eCore Services.")
+st.caption("Powered by eCore Services.")
