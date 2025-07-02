@@ -5,13 +5,23 @@ import requests
 import json
 import os
 import time
+import csv
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 
 API_URL = "https://api.scrapin.io/enrichment/profile"
-MAX_WORKERS = 5           # reduced from 10
+MAX_WORKERS = 5
 MAX_RETRIES = 2
 INITIAL_BACKOFF = 1
-PER_REQUEST_DELAY = 1       # throttle delay (in seconds)
+PER_REQUEST_DELAY = 5
+
+lock = Lock()
+
+PREFERRED_FIELDS = [
+    "sourceUrl", "status", "person.firstName", "person.lastName", "person.headline", "person.location",
+    "person.positions.positionsCount", "person.summary"
+]
 
 def load_config():
     with open("config.json", "r") as f:
@@ -47,18 +57,16 @@ def should_keep_field(field):
     )
 
 def scrape_profile(url, apikey, retries=MAX_RETRIES, backoff=INITIAL_BACKOFF):
-    time.sleep(PER_REQUEST_DELAY)  # throttle to avoid hitting global rate limit
-
+    time.sleep(PER_REQUEST_DELAY)
     for attempt in range(1, retries + 1):
         try:
             response = requests.get(API_URL, params={"apikey": apikey, "linkedInUrl": url})
             if response.status_code == 429:
-                print(f"Rate limit hit (429). Sleeping for 60 seconds...")
+                print("Rate limit hit (429). Sleeping for 60 seconds...")
                 time.sleep(60)
                 continue
 
             response.raise_for_status()
-
             result = response.json()
             if not result.get("success", False):
                 error_msg = result.get("message") or result.get("error") or "Unknown API error"
@@ -72,13 +80,11 @@ def scrape_profile(url, apikey, retries=MAX_RETRIES, backoff=INITIAL_BACKOFF):
 
         except (requests.exceptions.HTTPError, ValueError) as e:
             status = getattr(response, 'status_code', 500)
-
             if attempt == retries or not (500 <= status < 600):
                 return {"sourceUrl": url, "status": f"{type(e).__name__}: {str(e)}"}
             else:
                 time.sleep(backoff)
                 backoff *= 2
-
         except Exception as e:
             return {"sourceUrl": url, "status": f"Error: {str(e)}"}
 
@@ -97,17 +103,39 @@ def batch_scrape(input_file, output_file, shutdown=False, batch_index=None):
         futures = [executor.submit(scrape_profile, url, apikey) for url in urls]
         for i, future in enumerate(as_completed(futures), 1):
             result = future.result()
-            results.append(result)
-            print(f"[{i}/{len(urls)}] {result['sourceUrl']} → {result['status']}")
+            with lock:
+                results.append(result)
+                print(f"[{i}/{len(urls)}] {result['sourceUrl']} → {result['status']}")
 
-    pd.DataFrame(results).to_csv(output_file, index=False)
-    print(f"\n✅ Done. Output saved to {output_file}")
+    # Collect and order fields
+    all_fields = set().union(*(r.keys() for r in results))
+    remaining_fields = sorted(f for f in all_fields if f not in PREFERRED_FIELDS)
+    fieldnames = PREFERRED_FIELDS + remaining_fields
+
+    failure_file = output_file.replace("result_", "failures_")
+
+    with open(output_file, mode='w', newline='', encoding='utf-8') as res_f:
+        writer = csv.DictWriter(res_f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(results)
+
+    print(f"\n✅ Done. Saved {len(results)} results to {output_file}")
 
     failures = [r for r in results if r["status"] != "Success"]
     if failures:
-        failure_file = output_file.replace("result_", "failures_")
-        pd.DataFrame(failures).to_csv(failure_file, index=False)
+        with open(failure_file, mode='w', newline='', encoding='utf-8') as fail_f:
+            writer = csv.DictWriter(fail_f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(failures)
         print(f"⚠️  Saved {len(failures)} failures to {failure_file}")
+
+    zip_file = f"scrape_results_{batch_index or '0'}.zip"
+    with zipfile.ZipFile(zip_file, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        zipf.write(output_file)
+        if failures:
+            zipf.write(failure_file)
+
+    print(f"📦 Zipped results into {zip_file}")
 
     if shutdown:
         print("Shutting down machine...")

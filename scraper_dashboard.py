@@ -5,6 +5,7 @@ import json
 import time
 import uuid
 import shutil
+import zipfile
 from google.cloud import storage
 from google.oauth2 import service_account
 
@@ -31,7 +32,7 @@ st.markdown(f"**Session ID:** `{run_id}`")
 
 # --- Upload + Split CSV ---
 uploaded_file = st.file_uploader("Upload full LinkedIn CSV to split and scrape", type=["csv"])
-num_chunks = 4  # fixed
+num_chunks = 3  # CHANGED: fixed to 3
 
 if uploaded_file:
     input_df = pd.read_csv(uploaded_file)
@@ -45,10 +46,8 @@ if uploaded_file:
     if st.button("Split & Upload"):
         st.info("🧹 Clearing previous session files...")
 
-        # SAFE DELETE (only user session files)
+        # SAFE DELETE
         for prefix in [f"users/{run_id}/chunks/", f"users/{run_id}/results/"]:
-            if not prefix.startswith(f"users/{run_id}/"):
-                raise ValueError("Unsafe delete prefix detected — aborting.")
             blobs = list(bucket.list_blobs(prefix=prefix))
             for blob in blobs:
                 blob.delete()
@@ -73,40 +72,41 @@ if uploaded_file:
         st.balloons()
         st.success("🚀 All chunks uploaded. Scraping will start automatically.")
 
-# --- Progress Monitoring with Auto Refresh ---
+# --- Progress Monitoring ---
 st.header("📊 Scraping Progress")
 progress_placeholder = st.empty()
 status_text = st.empty()
 
 def count_completed_chunks():
     result_blobs = list(bucket.list_blobs(prefix=f"users/{run_id}/results/"))
-    return len([b for b in result_blobs if b.name.endswith(".csv") and "result_" in b.name])
+    return len([b for b in result_blobs if b.name.endswith(".zip") and "scrape_results_" in b.name])
 
 completed_chunks = 0
-for _ in range(60):  # 5 minutes max (60 × 5s)
+for _ in range(60):
     completed_chunks = count_completed_chunks()
     progress = int((completed_chunks / num_chunks) * 100)
     progress_placeholder.progress(progress, text=f"{completed_chunks}/{num_chunks} chunks completed")
-
     if completed_chunks >= num_chunks:
         status_text.success("✅ All chunks processed.")
         break
     time.sleep(5)
 
 # --- Merge Results ---
-def download_csv_files(prefix):
+def extract_zip_to_tmp(zip_path):
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall("/tmp")
+
+def download_and_extract_zip_files(prefix):
     blobs = list(bucket.list_blobs(prefix=prefix))
-    files = []
     for blob in blobs:
-        if blob.name.endswith(".csv") and ("result_" in blob.name or "failures_" in blob.name):
+        if blob.name.endswith(".zip") and "scrape_results_" in blob.name:
             local_path = f"/tmp/{os.path.basename(blob.name)}"
             blob.download_to_filename(local_path)
-            files.append(local_path)
-    return files
+            extract_zip_to_tmp(local_path)
 
-def merge_csvs(files, pattern):
-    dfs = [pd.read_csv(file) for file in files if pattern in os.path.basename(file)]
-    return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+def merge_csvs(pattern):
+    files = [os.path.join("/tmp", f) for f in os.listdir("/tmp") if f.endswith(".csv") and pattern in f]
+    return pd.concat([pd.read_csv(f) for f in files], ignore_index=True) if files else pd.DataFrame()
 
 def upload_to_bucket(local_path, dest_name):
     blob = bucket.blob(dest_name)
@@ -115,9 +115,9 @@ def upload_to_bucket(local_path, dest_name):
 merge_success = False
 if completed_chunks == num_chunks:
     st.info("🔀 Merging results...")
-    files = download_csv_files(f"users/{run_id}/results/")
-    success_df = merge_csvs(files, "result_")
-    failure_df = merge_csvs(files, "failures_")
+    download_and_extract_zip_files(f"users/{run_id}/results/")
+    success_df = merge_csvs("result_")
+    failure_df = merge_csvs("failures_")
 
     if not success_df.empty:
         success_path = "/tmp/ALL_SUCCESS.csv"
