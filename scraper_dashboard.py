@@ -72,12 +72,12 @@ st.header("📊 Scraping Progress")
 progress_placeholder = st.empty()
 status_text = st.empty()
 
-def fetch_progress_records():
-    blob = bucket.blob(f"users/{run_id}/results/progress.jsonl")
+def fetch_central_progress():
+    blob = bucket.blob("progress.jsonl")
     if not blob.exists():
         return []
 
-    local_path = f"/tmp/progress_{run_id}.jsonl"
+    local_path = "/tmp/central_progress.jsonl"
     try:
         blob.download_to_filename(local_path)
         with open(local_path, "r") as f:
@@ -86,15 +86,16 @@ def fetch_progress_records():
         st.warning(f"Error reading progress log: {e}")
         return []
 
-def count_completed_chunks(records):
-    return sum(1 for r in records if r.get("status") == "completed")
+def filter_records_by_run_id(records, run_id):
+    return [r for r in records if r.get("run_id") == run_id]
 
-# Continuous wait loop until all chunks are marked "completed"
+# Wait until all chunks for this run_id are marked "completed"
 completed_chunks = 0
 attempt = 0
 while True:
-    records = fetch_progress_records()
-    completed_chunks = count_completed_chunks(records)
+    all_records = fetch_central_progress()
+    session_records = filter_records_by_run_id(all_records, run_id)
+    completed_chunks = sum(1 for r in session_records if r.get("status") == "completed")
     progress = int((completed_chunks / num_chunks) * 100)
     progress_placeholder.progress(progress, text=f"{completed_chunks}/{num_chunks} chunks completed")
 
@@ -106,10 +107,10 @@ while True:
     status_text.info(f"⏳ Waiting... (Attempt {attempt})")
     time.sleep(5)
 
-# Optional: show completed records
+# Optional: view raw progress
 if completed_chunks:
-    with st.expander("📋 View completed chunk logs"):
-        st.json([r for r in records if r.get("status") == "completed"])
+    with st.expander("📋 View completed logs"):
+        st.json(session_records)
 
 # --- Merge Results ---
 def extract_zip_to_tmp(zip_path):

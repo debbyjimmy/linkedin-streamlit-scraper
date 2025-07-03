@@ -2,12 +2,28 @@
 
 BUCKET="contact-scraper-bucket"
 ZONE="us-central1-a"
-TEMPLATE="scraper-template-v10"
+TEMPLATE="scraper-template-v11"
 PROJECT="contact-scraper-463913"
+
+# Download central progress file once
+CENTRAL_PROGRESS_FILE="/tmp/central_progress.jsonl"
+gsutil cp "gs://$BUCKET/progress.jsonl" "$CENTRAL_PROGRESS_FILE" 2>/dev/null
+
+# Convert progress log into associative array: run_id:completed_chunks
+declare -A COMPLETED_MAP
+
+if [[ -f "$CENTRAL_PROGRESS_FILE" ]]; then
+  while IFS= read -r line; do
+    run_id=$(echo "$line" | jq -r '.run_id')
+    chunk_index=$(echo "$line" | jq -r '.chunk_index')
+    if [[ "$run_id" != "null" && "$chunk_index" != "null" ]]; then
+      COMPLETED_MAP["$run_id,$chunk_index"]=1
+    fi
+  done < "$CENTRAL_PROGRESS_FILE"
+fi
 
 # Loop through all session folders
 for CHUNK_PATH in $(gsutil ls gs://$BUCKET/users/*/chunks/ 2>/dev/null); do
-  # Extract RUN_ID from path: users/<run_id>/chunks/
   if [[ "$CHUNK_PATH" =~ users/([^/]+)/chunks/ ]]; then
     RUN_ID="${BASH_REMATCH[1]}"
     echo "🔍 Found session: $RUN_ID"
@@ -15,30 +31,29 @@ for CHUNK_PATH in $(gsutil ls gs://$BUCKET/users/*/chunks/ 2>/dev/null); do
     NUM_CHUNKS=$(gsutil ls gs://$BUCKET/users/$RUN_ID/chunks/ | grep -c 'chunk_')
     echo "📦 Found $NUM_CHUNKS chunk files for run_id=$RUN_ID"
 
-    # Check progress.jsonl
-    PROGRESS_FILE="/tmp/progress_${RUN_ID}.jsonl"
-    gsutil cp "gs://$BUCKET/users/$RUN_ID/results/progress.jsonl" "$PROGRESS_FILE" 2>/dev/null
-
-    if [[ -f "$PROGRESS_FILE" ]]; then
-      COMPLETED=$(grep -c '"status": "completed"' "$PROGRESS_FILE")
-      echo "✅ $COMPLETED of $NUM_CHUNKS chunks marked completed"
-
-      if [[ "$COMPLETED" -eq "$NUM_CHUNKS" ]]; then
-        echo "🎯 Session $RUN_ID fully completed. Skipping..."
-        continue
+    # Count completed from central progress
+    COMPLETED=0
+    for i in $(seq 1 $NUM_CHUNKS); do
+      if [[ "${COMPLETED_MAP[$RUN_ID,$i]}" == "1" ]]; then
+        ((COMPLETED++))
       fi
+    done
+
+    echo "✅ $COMPLETED of $NUM_CHUNKS chunks completed for $RUN_ID"
+
+    if [[ "$COMPLETED" -eq "$NUM_CHUNKS" ]]; then
+      echo "🎯 Session $RUN_ID fully completed. Skipping..."
+      continue
     fi
 
+    # Launch instances for missing chunks
     for i in $(seq 1 $NUM_CHUNKS); do
-      VM_NAME="scraper-vm-${RUN_ID}-${i}"
-
-      # Skip chunk if result already uploaded
-      RESULT_PATH="gs://$BUCKET/users/$RUN_ID/results/scrape_results_${i}.zip"
-      if gsutil -q stat "$RESULT_PATH"; then
+      if [[ "${COMPLETED_MAP[$RUN_ID,$i]}" == "1" ]]; then
         echo "✅ Chunk $i already completed, skipping..."
         continue
       fi
 
+      VM_NAME="scraper-vm-${RUN_ID}-${i}"
       echo "🚀 Launching $VM_NAME with run_id=$RUN_ID..."
       gcloud compute instances create "$VM_NAME" \
         --zone="$ZONE" \

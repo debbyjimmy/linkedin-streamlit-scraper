@@ -36,10 +36,8 @@ RUN_ID=$(echo "$RUN_ID_RAW" | tr -d '[:space:]')
 
 echo "🖥️ VM Name: '$VM_NAME'"
 echo "📄 Chunk Index: '$CHUNK_INDEX'"
-echo "🧾 Raw Run ID: '$RUN_ID_RAW'"
 echo "🧾 Sanitized Run ID: '$RUN_ID'"
 export RUN_ID="$RUN_ID"
-
 
 mkdir -p ~/workspace
 cd ~/workspace || exit 1
@@ -69,6 +67,37 @@ fi
 
 echo "📝 Uploading log..."
 gsutil cp /var/log/startup-script.log "gs://$BUCKET/users/$RUN_ID/results/logs/log_${CHUNK_INDEX}.txt"
+
+# Append progress to central file
+echo "🧾 Appending to central progress log..."
+cat <<EOF > progress_tmp.json
+{
+  "run_id": "$RUN_ID",
+  "chunk_index": $CHUNK_INDEX,
+  "vm_name": "$VM_NAME",
+  "status": "completed",
+  "success_count": $(grep -c '"Success"' result_${CHUNK_INDEX}.csv 2>/dev/null || echo 0),
+  "failure_count": $(grep -v '"Success"' result_${CHUNK_INDEX}.csv | wc -l),
+  "start_time": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "end_time": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "result_path": "gs://$BUCKET/users/$RUN_ID/results/$ZIP_FILE"
+}
+EOF
+
+# Safely append to central progress.jsonl in root
+CENTRAL_PROGRESS="gs://$BUCKET/progress.jsonl"
+TMP_LINE="gs://$BUCKET/tmp/progress_chunk_${RUN_ID}_${CHUNK_INDEX}.jsonl"
+
+gsutil cp progress_tmp.json "$TMP_LINE"
+
+if gsutil -q stat "$CENTRAL_PROGRESS"; then
+  gsutil compose "$CENTRAL_PROGRESS" "$TMP_LINE" "$CENTRAL_PROGRESS"
+else
+  gsutil mv "$TMP_LINE" "$CENTRAL_PROGRESS"
+fi
+
+# Cleanup
+rm -f progress_tmp.json
 
 echo "✅ Finished chunk ${CHUNK_INDEX}, deleting VM..."
 gcloud compute instances delete "$VM_NAME" --zone="$ZONE" --quiet || sudo shutdown -h now

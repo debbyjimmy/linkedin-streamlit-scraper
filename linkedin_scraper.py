@@ -8,7 +8,6 @@ import csv
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
-from datetime import datetime
 
 API_URL = "https://api.scrapin.io/enrichment/profile"
 MAX_WORKERS = 5
@@ -88,23 +87,6 @@ def scrape_profile(url, apikey, retries=MAX_RETRIES, backoff=INITIAL_BACKOFF):
         except Exception as e:
             return {"sourceUrl": url, "status": f"Error: {str(e)}"}
 
-def log_progress(run_id, chunk_index, success_count, failure_count, zip_file):
-    progress = {
-        "run_id": run_id,
-        "chunk_index": int(chunk_index),
-        "vm_name": os.uname().nodename,
-        "status": "completed",
-        "success_count": success_count,
-        "failure_count": failure_count,
-        "start_time": datetime.utcnow().isoformat(),
-        "end_time": datetime.utcnow().isoformat(),
-        "result_path": f"gs://contact-scraper-bucket/users/{run_id}/results/{zip_file}"
-    }
-
-    with open("progress.json", "a") as f:
-        f.write(json.dumps(progress) + "\n")
-    os.system(f"gsutil cp progress.json gs://contact-scraper-bucket/users/{run_id}/results/progress.jsonl")
-
 def batch_scrape(input_file, output_file, shutdown=False, batch_index=None):
     config = load_config()
     apikey = config["API_KEY"]
@@ -154,9 +136,6 @@ def batch_scrape(input_file, output_file, shutdown=False, batch_index=None):
             zipf.write(failure_file)
 
     print(f"📦 Zipped results into {zip_file}")
-
-    # Log progress to GCS
-    log_progress(run_id, batch_index, len(results) - len(failures), len(failures), zip_file)
 
     if shutdown:
         print("Shutting down machine...")
