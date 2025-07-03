@@ -32,21 +32,18 @@ st.markdown(f"**Session ID:** `{run_id}`")
 
 # --- Upload + Split CSV ---
 uploaded_file = st.file_uploader("Upload full LinkedIn CSV to split and scrape", type=["csv"])
-num_chunks = 3  # CHANGED: fixed to 3
+num_chunks = 3
 
 if uploaded_file:
     input_df = pd.read_csv(uploaded_file)
     st.write(f"✅ Dataframe loaded: {len(input_df)} rows")
 
-    # Estimate time per chunk (assumes 5 threads per VM, ~200 reqs/min globally)
     rows_per_chunk = -(-len(input_df) // num_chunks)
     est_time_per_chunk_min = rows_per_chunk / 200
     st.info(f"⏱️ Estimated processing time: ~{int(est_time_per_chunk_min)} minutes per chunk")
 
     if st.button("Split & Upload"):
         st.info("🧹 Clearing previous session files...")
-
-        # SAFE DELETE
         for prefix in [f"users/{run_id}/chunks/", f"users/{run_id}/results/"]:
             blobs = list(bucket.list_blobs(prefix=prefix))
             for blob in blobs:
@@ -54,7 +51,6 @@ if uploaded_file:
 
         st.info("📤 Splitting CSV and uploading new chunks...")
         os.makedirs("chunks", exist_ok=True)
-
         for i in range(num_chunks):
             start = i * rows_per_chunk
             end = min((i + 1) * rows_per_chunk, len(input_df))
@@ -67,7 +63,6 @@ if uploaded_file:
                 blob.upload_from_filename(path)
                 st.success(f"✅ Uploaded chunk: {filename} ({len(chunk_df)} rows)")
                 os.remove(path)
-
         shutil.rmtree("chunks", ignore_errors=True)
         st.balloons()
         st.success("🚀 All chunks uploaded. Scraping will start automatically.")
@@ -83,20 +78,32 @@ def fetch_progress_records():
         return []
 
     local_path = f"/tmp/progress_{run_id}.jsonl"
-    blob.download_to_filename(local_path)
-    with open(local_path, "r") as f:
-        return [json.loads(line) for line in f if line.strip()]
+    try:
+        blob.download_to_filename(local_path)
+        with open(local_path, "r") as f:
+            return [json.loads(line) for line in f if line.strip()]
+    except Exception as e:
+        st.warning(f"Error reading progress log: {e}")
+        return []
 
 completed_chunks = 0
-for _ in range(60):
+max_checks = 60
+for attempt in range(max_checks):
     records = fetch_progress_records()
     completed_chunks = len(records)
     progress = int((completed_chunks / num_chunks) * 100)
     progress_placeholder.progress(progress, text=f"{completed_chunks}/{num_chunks} chunks completed")
+
     if completed_chunks >= num_chunks:
         status_text.success("✅ All chunks processed.")
         break
+    status_text.info(f"⏳ Waiting... ({attempt + 1}/{max_checks})")
     time.sleep(5)
+
+# Optional: show raw progress entries
+if completed_chunks:
+    with st.expander("📋 View progress entries"):
+        st.json(fetch_progress_records())
 
 # --- Merge Results ---
 def extract_zip_to_tmp(zip_path):
