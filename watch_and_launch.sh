@@ -18,9 +18,10 @@ for CHUNK_PATH in $(gsutil ls gs://$BUCKET/users/*/chunks/ 2>/dev/null); do
     for i in $(seq 1 $NUM_CHUNKS); do
       VM_NAME="scraper-vm-${RUN_ID}-${i}"
 
-      # Check if VM already exists
-      if gcloud compute instances describe "$VM_NAME" --zone "$ZONE" --project "$PROJECT" &>/dev/null; then
-        echo "⚠️ $VM_NAME already exists, skipping..."
+      # Skip if result already exists
+      RESULT_PATH="gs://$BUCKET/users/$RUN_ID/results/scrape_results_${i}.zip"
+      if gsutil -q stat "$RESULT_PATH"; then
+        echo "✅ Chunk $i already completed, skipping..."
         continue
       fi
 
