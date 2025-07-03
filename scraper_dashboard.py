@@ -32,7 +32,7 @@ st.markdown(f"**Session ID:** `{run_id}`")
 
 # --- Upload + Split CSV ---
 uploaded_file = st.file_uploader("Upload full LinkedIn CSV to split and scrape", type=["csv"])
-num_chunks = 3  # You can change this if needed
+num_chunks = 3
 
 if uploaded_file:
     input_df = pd.read_csv(uploaded_file)
@@ -86,26 +86,30 @@ def fetch_progress_records():
         st.warning(f"Error reading progress log: {e}")
         return []
 
+def count_completed_chunks(records):
+    return sum(1 for r in records if r.get("status") == "completed")
+
+# Continuous wait loop until all chunks are marked "completed"
 completed_chunks = 0
 attempt = 0
-while completed_chunks < num_chunks:
+while True:
     records = fetch_progress_records()
-    completed_chunks = len(records)
+    completed_chunks = count_completed_chunks(records)
     progress = int((completed_chunks / num_chunks) * 100)
     progress_placeholder.progress(progress, text=f"{completed_chunks}/{num_chunks} chunks completed")
 
     if completed_chunks >= num_chunks:
-        status_text.success("✅ All chunks processed.")
+        status_text.success("✅ All chunks completed.")
         break
 
     attempt += 1
     status_text.info(f"⏳ Waiting... (Attempt {attempt})")
     time.sleep(5)
 
-# Optional: View progress entries
+# Optional: show completed records
 if completed_chunks:
-    with st.expander("📋 View raw progress records"):
-        st.json(fetch_progress_records())
+    with st.expander("📋 View completed chunk logs"):
+        st.json([r for r in records if r.get("status") == "completed"])
 
 # --- Merge Results ---
 def extract_zip_to_tmp(zip_path):
@@ -116,47 +120,4 @@ def download_and_extract_zip_files(prefix):
     blobs = list(bucket.list_blobs(prefix=prefix))
     for blob in blobs:
         if blob.name.endswith(".zip") and "scrape_results_" in blob.name:
-            local_path = f"/tmp/{os.path.basename(blob.name)}"
-            blob.download_to_filename(local_path)
-            extract_zip_to_tmp(local_path)
-
-def merge_csvs(pattern):
-    files = [os.path.join("/tmp", f) for f in os.listdir("/tmp") if f.endswith(".csv") and pattern in f]
-    return pd.concat([pd.read_csv(f) for f in files], ignore_index=True) if files else pd.DataFrame()
-
-def upload_to_bucket(local_path, dest_name):
-    blob = bucket.blob(dest_name)
-    blob.upload_from_filename(local_path)
-
-merge_success = False
-if completed_chunks == num_chunks:
-    st.info("🔀 Merging results...")
-    download_and_extract_zip_files(f"users/{run_id}/results/")
-    success_df = merge_csvs("result_")
-    failure_df = merge_csvs("failures_")
-
-    if not success_df.empty:
-        success_path = "/tmp/ALL_SUCCESS.csv"
-        success_df.to_csv(success_path, index=False)
-        upload_to_bucket(success_path, f"users/{run_id}/results/ALL_SUCCESS.csv")
-
-    if not failure_df.empty:
-        failure_path = "/tmp/ALL_FAILURES.csv"
-        failure_df.to_csv(failure_path, index=False)
-        upload_to_bucket(failure_path, f"users/{run_id}/results/ALL_FAILURES.csv")
-
-    merge_success = True
-
-# --- Download Buttons ---
-if merge_success:
-    st.success("🎉 Merge completed. You can now download your results:")
-    for fname in ["ALL_SUCCESS.csv", "ALL_FAILURES.csv"]:
-        blob = bucket.blob(f"users/{run_id}/results/{fname}")
-        local_path = f"/tmp/{fname}"
-        if blob.exists():
-            blob.download_to_filename(local_path)
-            with open(local_path, "rb") as f:
-                st.download_button(f"⬇️ Download {fname}", f, file_name=fname)
-
-st.markdown("---")
-st.caption("Powered by eCore Services.")
+            local_path = f"/tmp/{os.path.basename(blob.name)}_
