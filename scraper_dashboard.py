@@ -32,7 +32,7 @@ st.markdown(f"**Session ID:** `{run_id}`")
 
 # --- Upload + Split CSV ---
 uploaded_file = st.file_uploader("Upload full LinkedIn CSV to split and scrape", type=["csv"])
-num_chunks = 3
+num_chunks = 3  # You can change this if needed
 
 if uploaded_file:
     input_df = pd.read_csv(uploaded_file)
@@ -87,8 +87,8 @@ def fetch_progress_records():
         return []
 
 completed_chunks = 0
-max_checks = 60
-for attempt in range(max_checks):
+attempt = 0
+while completed_chunks < num_chunks:
     records = fetch_progress_records()
     completed_chunks = len(records)
     progress = int((completed_chunks / num_chunks) * 100)
@@ -97,12 +97,14 @@ for attempt in range(max_checks):
     if completed_chunks >= num_chunks:
         status_text.success("✅ All chunks processed.")
         break
-    status_text.info(f"⏳ Waiting... ({attempt + 1}/{max_checks})")
+
+    attempt += 1
+    status_text.info(f"⏳ Waiting... (Attempt {attempt})")
     time.sleep(5)
 
-# Optional: show raw progress entries
+# Optional: View progress entries
 if completed_chunks:
-    with st.expander("📋 View progress entries"):
+    with st.expander("📋 View raw progress records"):
         st.json(fetch_progress_records())
 
 # --- Merge Results ---
