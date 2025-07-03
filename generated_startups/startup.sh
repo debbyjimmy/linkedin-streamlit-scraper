@@ -38,6 +38,8 @@ echo "🖥️ VM Name: '$VM_NAME'"
 echo "📄 Chunk Index: '$CHUNK_INDEX'"
 echo "🧾 Raw Run ID: '$RUN_ID_RAW'"
 echo "🧾 Sanitized Run ID: '$RUN_ID'"
+export RUN_ID="$RUN_ID"
+
 
 mkdir -p ~/workspace
 cd ~/workspace || exit 1

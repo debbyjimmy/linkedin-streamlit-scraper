@@ -77,13 +77,20 @@ st.header("📊 Scraping Progress")
 progress_placeholder = st.empty()
 status_text = st.empty()
 
-def count_completed_chunks():
-    result_blobs = list(bucket.list_blobs(prefix=f"users/{run_id}/results/"))
-    return len([b for b in result_blobs if b.name.endswith(".zip") and "scrape_results_" in b.name])
+def fetch_progress_records():
+    blob = bucket.blob(f"users/{run_id}/results/progress.jsonl")
+    if not blob.exists():
+        return []
+
+    local_path = f"/tmp/progress_{run_id}.jsonl"
+    blob.download_to_filename(local_path)
+    with open(local_path, "r") as f:
+        return [json.loads(line) for line in f if line.strip()]
 
 completed_chunks = 0
 for _ in range(60):
-    completed_chunks = count_completed_chunks()
+    records = fetch_progress_records()
+    completed_chunks = len(records)
     progress = int((completed_chunks / num_chunks) * 100)
     progress_placeholder.progress(progress, text=f"{completed_chunks}/{num_chunks} chunks completed")
     if completed_chunks >= num_chunks:
