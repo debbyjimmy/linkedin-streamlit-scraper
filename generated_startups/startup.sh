@@ -76,10 +76,7 @@ cat <<EOF > progress_tmp.json
   "chunk_index": $CHUNK_INDEX,
   "vm_name": "$VM_NAME",
   "status": "completed",
-  "success_count": $(grep -c '"Success"' result_${CHUNK_INDEX}.csv 2>/dev/null || echo 0),
-  "failure_count": $(grep -v '"Success"' result_${CHUNK_INDEX}.csv | wc -l),
-  "start_time": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-  "end_time": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
   "result_path": "gs://$BUCKET/users/$RUN_ID/results/$ZIP_FILE"
 }
 EOF

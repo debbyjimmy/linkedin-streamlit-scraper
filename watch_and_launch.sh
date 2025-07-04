@@ -1,40 +1,52 @@
 #!/bin/bash
 
+set -euo pipefail
+
 BUCKET="contact-scraper-bucket"
 ZONE="us-central1-a"
-TEMPLATE="scraper-template-v11"
+TEMPLATE="scraper-template-v14"
 PROJECT="contact-scraper-463913"
 
-# Download central progress file once
-CENTRAL_PROGRESS_FILE="/tmp/central_progress.jsonl"
-gsutil cp "gs://$BUCKET/progress.jsonl" "$CENTRAL_PROGRESS_FILE" 2>/dev/null
+# Temp file for cleaned progress log
+CENTRAL_PROGRESS_FILE=$(mktemp /tmp/central_progress_clean.XXXXXX.jsonl)
 
-# Convert progress log into associative array: run_id:completed_chunks
-declare -A COMPLETED_MAP
-
-if [[ -f "$CENTRAL_PROGRESS_FILE" ]]; then
-  while IFS= read -r line; do
-    run_id=$(echo "$line" | jq -r '.run_id')
-    chunk_index=$(echo "$line" | jq -r '.chunk_index')
-    if [[ "$run_id" != "null" && "$chunk_index" != "null" ]]; then
-      COMPLETED_MAP["$run_id,$chunk_index"]=1
-    fi
-  done < "$CENTRAL_PROGRESS_FILE"
+echo "📥 Downloading and cleaning central progress file..."
+if gsutil cp "gs://$BUCKET/progress.jsonl" - 2>/dev/null | jq -c . 2>/dev/null > "$CENTRAL_PROGRESS_FILE"; then
+  echo "✅ Cleaned progress file ready: $CENTRAL_PROGRESS_FILE"
+else
+  echo "⚠️ Failed to fetch or clean progress.jsonl. Proceeding with empty progress state."
+  > "$CENTRAL_PROGRESS_FILE"
 fi
 
-# Loop through all session folders
+# Map of run_id,chunk_index to indicate completed .zip result
+declare -A COMPLETED_MAP
+
+while IFS= read -r line; do
+  [[ -z "$line" || "$line" == "null" ]] && continue
+
+  run_id=$(echo "$line" | jq -r '.run_id // empty')
+  chunk_index=$(echo "$line" | jq -r '.chunk_index // empty')
+  result_path=$(echo "$line" | jq -r '.result_path // empty')
+
+  if [[ "$run_id" && "$chunk_index" && "$result_path" =~ \.zip$ ]]; then
+    COMPLETED_MAP["$run_id,$chunk_index"]=1
+  fi
+done < "$CENTRAL_PROGRESS_FILE"
+
+# Loop through all sessions
 for CHUNK_PATH in $(gsutil ls gs://$BUCKET/users/*/chunks/ 2>/dev/null); do
   if [[ "$CHUNK_PATH" =~ users/([^/]+)/chunks/ ]]; then
     RUN_ID="${BASH_REMATCH[1]}"
-    echo "🔍 Found session: $RUN_ID"
+    echo -e "\n🔍 Found session: $RUN_ID"
 
-    NUM_CHUNKS=$(gsutil ls gs://$BUCKET/users/$RUN_ID/chunks/ | grep -c 'chunk_')
+    NUM_CHUNKS=$(gsutil ls "gs://$BUCKET/users/$RUN_ID/chunks/" | grep -c 'chunk_')
     echo "📦 Found $NUM_CHUNKS chunk files for run_id=$RUN_ID"
 
-    # Count completed from central progress
+    # Count how many chunks have zipped results
     COMPLETED=0
-    for i in $(seq 1 $NUM_CHUNKS); do
-      if [[ "${COMPLETED_MAP[$RUN_ID,$i]}" == "1" ]]; then
+    for i in $(seq 1 "$NUM_CHUNKS"); do
+      key="$RUN_ID,$i"
+      if [[ "${COMPLETED_MAP[$key]+exists}" ]]; then
         ((COMPLETED++))
       fi
     done
@@ -46,9 +58,10 @@ for CHUNK_PATH in $(gsutil ls gs://$BUCKET/users/*/chunks/ 2>/dev/null); do
       continue
     fi
 
-    # Launch instances for missing chunks
-    for i in $(seq 1 $NUM_CHUNKS); do
-      if [[ "${COMPLETED_MAP[$RUN_ID,$i]}" == "1" ]]; then
+    # Launch missing chunks
+    for i in $(seq 1 "$NUM_CHUNKS"); do
+      key="$RUN_ID,$i"
+      if [[ "${COMPLETED_MAP[$key]+exists}" ]]; then
         echo "✅ Chunk $i already completed, skipping..."
         continue
       fi
@@ -63,3 +76,5 @@ for CHUNK_PATH in $(gsutil ls gs://$BUCKET/users/*/chunks/ 2>/dev/null); do
     done
   fi
 done
+
+rm -f "$CENTRAL_PROGRESS_FILE"

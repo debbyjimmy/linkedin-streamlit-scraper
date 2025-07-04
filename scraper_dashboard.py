@@ -76,7 +76,6 @@ def fetch_central_progress():
     blob = bucket.blob("progress.jsonl")
     if not blob.exists():
         return []
-
     local_path = "/tmp/central_progress.jsonl"
     try:
         blob.download_to_filename(local_path)
@@ -89,13 +88,22 @@ def fetch_central_progress():
 def filter_records_by_run_id(records, run_id):
     return [r for r in records if r.get("run_id") == run_id]
 
-# Wait until all chunks for this run_id are marked "completed"
+# Monitor until all chunks have zipped result files
 completed_chunks = 0
 attempt = 0
 while True:
     all_records = fetch_central_progress()
     session_records = filter_records_by_run_id(all_records, run_id)
-    completed_chunks = sum(1 for r in session_records if r.get("status") == "completed")
+
+    seen_chunks = set()
+    for record in session_records:
+        if (
+            record.get("result_path", "").endswith(".zip")
+            and isinstance(record.get("chunk_index"), int)
+        ):
+            seen_chunks.add(record["chunk_index"])
+
+    completed_chunks = len(seen_chunks)
     progress = int((completed_chunks / num_chunks) * 100)
     progress_placeholder.progress(progress, text=f"{completed_chunks}/{num_chunks} chunks completed")
 
