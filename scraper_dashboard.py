@@ -114,11 +114,6 @@ if run_id:
         status_text.info(f"⏳ Waiting... (Attempt {attempt})")
         time.sleep(5)
 
-    # Optional: view raw progress
-    if completed_chunks:
-        with st.expander("📋 View completed logs"):
-            st.json(session_records)
-
     # --- Merge Results ---
     def extract_zip_to_tmp(zip_path):
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
