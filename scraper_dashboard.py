@@ -33,16 +33,11 @@ bucket = client.bucket(bucket_name)
 uploaded_file = st.file_uploader("Upload full contact CSV to process", type=["csv"])
 num_chunks = 3
 
-# --- Generate Session UUID (only when file is uploaded) ---
-run_id = st.session_state.get("run_id")
-if not run_id and uploaded_file:
+if uploaded_file:
     run_id = str(uuid.uuid4())[:8]
     st.session_state["run_id"] = run_id
-    st.experimental_rerun()
-elif run_id:
     st.markdown(f"**Session ID:** `{run_id}`")
 
-if uploaded_file:
     input_df = pd.read_csv(uploaded_file)
     st.write(f"✅ Dataframe loaded: {len(input_df)} rows")
 
@@ -77,7 +72,9 @@ if uploaded_file:
         st.session_state["monitoring_active"] = True
 
 # --- Progress Monitoring ---
-if st.session_state.get("monitoring_active", False):
+run_id = st.session_state.get("run_id")
+
+if st.session_state.get("monitoring_active", False) and run_id:
     st_autorefresh(interval=5000, key="autorefresh")
 
     st.header("📊 Progress Monitor")
@@ -96,7 +93,7 @@ if st.session_state.get("monitoring_active", False):
 
             raw_json_blocks = raw.split('}\n{')
             records = []
-            for i, block in enumerate(raw_json_blocks):
+            for block in raw_json_blocks:
                 block = block.strip()
                 if not block:
                     continue
@@ -136,7 +133,9 @@ if st.session_state.get("monitoring_active", False):
         st.session_state["monitoring_active"] = False
         st.rerun()
 
-if not st.session_state.get("monitoring_active", False) and run_id:
+# --- Post-Processing ---
+run_id = st.session_state.get("run_id")
+if run_id and not st.session_state.get("monitoring_active", False):
     st.header("📊 Processing Complete")
 
     def extract_zip_to_tmp(zip_path):
@@ -182,6 +181,8 @@ if not st.session_state.get("monitoring_active", False) and run_id:
             blob.download_to_filename(local_path)
             with open(local_path, "rb") as f:
                 st.download_button(f"⬇️ Download {fname}", f, file_name=fname)
+
+    del st.session_state["run_id"]
 
 st.markdown("---")
 st.caption("Powered by eCore Services.")
