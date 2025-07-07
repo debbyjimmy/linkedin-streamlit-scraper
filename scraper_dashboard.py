@@ -67,109 +67,116 @@ if uploaded_file:
         st.balloons()
         st.success("🚀 All chunks uploaded. Scraping will start automatically.")
 
-# --- Progress Monitoring ---
-st.header("📊 Scraping Progress")
-progress_placeholder = st.empty()
-status_text = st.empty()
+        # --- Progress Monitoring ---
+        st.header("📊 Scraping Progress")
+        progress_placeholder = st.empty()
+        status_text = st.empty()
 
-def fetch_central_progress():
-    blob = bucket.blob("progress.jsonl")
-    if not blob.exists():
-        return []
-    local_path = "/tmp/central_progress.jsonl"
-    try:
-        blob.download_to_filename(local_path)
-        with open(local_path, "r") as f:
-            return [json.loads(line) for line in f if line.strip()]
-    except Exception as e:
-        st.warning(f"Error reading progress log: {e}")
-        return []
+        def fetch_central_progress():
+            blob = bucket.blob("progress.jsonl")
+            if not blob.exists():
+                return []
+            local_path = "/tmp/central_progress.jsonl"
+            try:
+                blob.download_to_filename(local_path)
+                records = []
+                with open(local_path, "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            records.append(json.loads(line))
+                        except json.JSONDecodeError as e:
+                            print(f"⚠️ Skipping bad line: {e}")
+                return records
+            except Exception as e:
+                st.warning(f"Error reading progress log: {e}")
+                return []
 
-def filter_records_by_run_id(records, run_id):
-    return [r for r in records if r.get("run_id") == run_id]
+        def filter_records_by_run_id(records, run_id):
+            return [r for r in records if r.get("run_id") == run_id]
 
-# Monitor until all chunks have zipped result files
-completed_chunks = 0
-attempt = 0
-while True:
-    all_records = fetch_central_progress()
-    session_records = filter_records_by_run_id(all_records, run_id)
+        completed_chunks = 0
+        attempt = 0
+        while True:
+            all_records = fetch_central_progress()
+            session_records = filter_records_by_run_id(all_records, run_id)
 
-    seen_chunks = set()
-    for record in session_records:
-        if (
-            record.get("result_path", "").endswith(".zip")
-            and isinstance(record.get("chunk_index"), int)
-        ):
-            seen_chunks.add(record["chunk_index"])
+            seen_chunks = set()
+            for record in session_records:
+                if (
+                    record.get("result_path", "").endswith(".zip")
+                    and isinstance(record.get("chunk_index"), int)
+                ):
+                    seen_chunks.add(record["chunk_index"])
 
-    completed_chunks = len(seen_chunks)
-    progress = int((completed_chunks / num_chunks) * 100)
-    progress_placeholder.progress(progress, text=f"{completed_chunks}/{num_chunks} chunks completed")
+            completed_chunks = len(seen_chunks)
+            progress = int((completed_chunks / num_chunks) * 100)
+            progress_placeholder.progress(progress, text=f"{completed_chunks}/{num_chunks} chunks completed")
 
-    if completed_chunks >= num_chunks:
-        status_text.success("✅ All chunks completed.")
-        break
+            if completed_chunks >= num_chunks:
+                status_text.success("✅ All chunks completed.")
+                break
 
-    attempt += 1
-    status_text.info(f"⏳ Waiting... (Attempt {attempt})")
-    time.sleep(5)
+            attempt += 1
+            status_text.info(f"⏳ Waiting... (Attempt {attempt})")
+            time.sleep(5)
 
-# Optional: view raw progress
-if completed_chunks:
-    with st.expander("📋 View completed logs"):
-        st.json(session_records)
+        if completed_chunks:
+            with st.expander("📋 View completed logs"):
+                st.json(session_records)
 
-# --- Merge Results ---
-def extract_zip_to_tmp(zip_path):
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-        zip_ref.extractall("/tmp")
+        # --- Merge Results ---
+        def extract_zip_to_tmp(zip_path):
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall("/tmp")
 
-def download_and_extract_zip_files(prefix):
-    blobs = list(bucket.list_blobs(prefix=prefix))
-    for blob in blobs:
-        if blob.name.endswith(".zip") and "scrape_results_" in blob.name:
-            local_path = f"/tmp/{os.path.basename(blob.name)}"
-            blob.download_to_filename(local_path)
-            extract_zip_to_tmp(local_path)
+        def download_and_extract_zip_files(prefix):
+            blobs = list(bucket.list_blobs(prefix=prefix))
+            for blob in blobs:
+                if blob.name.endswith(".zip") and "scrape_results_" in blob.name:
+                    local_path = f"/tmp/{os.path.basename(blob.name)}"
+                    blob.download_to_filename(local_path)
+                    extract_zip_to_tmp(local_path)
 
-def merge_csvs(pattern):
-    files = [os.path.join("/tmp", f) for f in os.listdir("/tmp") if f.endswith(".csv") and pattern in f]
-    return pd.concat([pd.read_csv(f) for f in files], ignore_index=True) if files else pd.DataFrame()
+        def merge_csvs(pattern):
+            files = [os.path.join("/tmp", f) for f in os.listdir("/tmp") if f.endswith(".csv") and pattern in f]
+            return pd.concat([pd.read_csv(f) for f in files], ignore_index=True) if files else pd.DataFrame()
 
-def upload_to_bucket(local_path, dest_name):
-    blob = bucket.blob(dest_name)
-    blob.upload_from_filename(local_path)
+        def upload_to_bucket(local_path, dest_name):
+            blob = bucket.blob(dest_name)
+            blob.upload_from_filename(local_path)
 
-merge_success = False
-if completed_chunks == num_chunks:
-    st.info("🔀 Merging results...")
-    download_and_extract_zip_files(f"users/{run_id}/results/")
-    success_df = merge_csvs("result_")
-    failure_df = merge_csvs("failures_")
+        merge_success = False
+        if completed_chunks == num_chunks:
+            st.info("🔀 Merging results...")
+            download_and_extract_zip_files(f"users/{run_id}/results/")
+            success_df = merge_csvs("result_")
+            failure_df = merge_csvs("failures_")
 
-    if not success_df.empty:
-        success_path = "/tmp/ALL_SUCCESS.csv"
-        success_df.to_csv(success_path, index=False)
-        upload_to_bucket(success_path, f"users/{run_id}/results/ALL_SUCCESS.csv")
+            if not success_df.empty:
+                success_path = "/tmp/ALL_SUCCESS.csv"
+                success_df.to_csv(success_path, index=False)
+                upload_to_bucket(success_path, f"users/{run_id}/results/ALL_SUCCESS.csv")
 
-    if not failure_df.empty:
-        failure_path = "/tmp/ALL_FAILURES.csv"
-        failure_df.to_csv(failure_path, index=False)
-        upload_to_bucket(failure_path, f"users/{run_id}/results/ALL_FAILURES.csv")
+            if not failure_df.empty:
+                failure_path = "/tmp/ALL_FAILURES.csv"
+                failure_df.to_csv(failure_path, index=False)
+                upload_to_bucket(failure_path, f"users/{run_id}/results/ALL_FAILURES.csv")
 
-    merge_success = True
+            merge_success = True
 
-# --- Download Buttons ---
-if merge_success:
-    st.success("🎉 Merge completed. You can now download your results:")
-    for fname in ["ALL_SUCCESS.csv", "ALL_FAILURES.csv"]:
-        blob = bucket.blob(f"users/{run_id}/results/{fname}")
-        local_path = f"/tmp/{fname}"
-        if blob.exists():
-            blob.download_to_filename(local_path)
-            with open(local_path, "rb") as f:
-                st.download_button(f"⬇️ Download {fname}", f, file_name=fname)
+        # --- Download Buttons ---
+        if merge_success:
+            st.success("🎉 Merge completed. You can now download your results:")
+            for fname in ["ALL_SUCCESS.csv", "ALL_FAILURES.csv"]:
+                blob = bucket.blob(f"users/{run_id}/results/{fname}")
+                local_path = f"/tmp/{fname}"
+                if blob.exists():
+                    blob.download_to_filename(local_path)
+                    with open(local_path, "rb") as f:
+                        st.download_button(f"⬇️ Download {fname}", f, file_name=fname)
 
 st.markdown("---")
 st.caption("Powered by eCore Services.")

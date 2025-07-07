@@ -19,7 +19,7 @@ lock = Lock()
 
 PREFERRED_FIELDS = [
     "sourceUrl", "status", "person.firstName", "person.lastName", "person.headline", "person.location",
-    "person.positions.positionsCount", "person.summary"
+    "person.positions.positionsCount", "person.summary", "person.followerCount"
 ]
 
 def load_config():
@@ -52,6 +52,7 @@ def should_keep_field(field):
         field.startswith("person.location") or
         field.startswith("person.summary") or
         field.startswith("person.positions") or
+        field.startswith("person.followerCount") or
         field.startswith("company")
     )
 
