@@ -81,9 +81,9 @@ if run_id:
         try:
             blob.download_to_filename(local_path)
             with open(local_path, "r") as f:
-                lines = f.read()
-            raw_objects = [json.loads(obj + "}") for obj in lines.split("}\n{") if obj.strip()]
-            return raw_objects
+                raw_lines = f.read()
+                json_str = f"[{raw_lines.replace('}\n{', '},{')}]"
+                return json.loads(json_str)
         except Exception as e:
             st.warning(f"Error reading progress log: {e}")
             return []
