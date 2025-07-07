@@ -104,6 +104,8 @@ if st.session_state.get("monitoring_active", False):
 
     all_records = fetch_central_progress()
     session_records = filter_records_by_run_id(all_records, run_id)
+    with st.expander("🔍 Raw session records", expanded=False):
+        st.code(json.dumps(session_records, indent=2))
 
     seen_chunks = set()
     for record in session_records:
