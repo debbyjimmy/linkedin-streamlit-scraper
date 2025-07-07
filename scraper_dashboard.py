@@ -91,9 +91,7 @@ if st.session_state.get("monitoring_active", False):
                     if not line:
                         continue
                     try:
-                        records.append(json.loads(line.strip().replace('
-', '').replace('
-', '')))
+                        records.append(json.loads(line.strip()))
                     except json.JSONDecodeError as e:
                         print(f"⚠️ Skipping bad line: {e}")
             return records
