@@ -108,7 +108,7 @@ if st.session_state.get("monitoring_active", False):
     seen_chunks = set()
     for record in session_records:
         if (
-            record.get("result_path", "").endswith(".zip")
+            record.get("status") == "completed"
             and isinstance(record.get("chunk_index"), int)
         ):
             seen_chunks.add(record["chunk_index"])
