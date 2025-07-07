@@ -85,22 +85,21 @@ if st.session_state.get("monitoring_active", False):
         try:
             blob.download_to_filename(local_path)
             with open(local_path, "r") as f:
-                content = f.read()
-            entries = content.strip().split("\n\n")
-            raw_lines = []
+                raw_lines = f.readlines()
+
             records = []
-            for entry in entries:
-                entry = entry.strip()
-                if not entry:
-                    continue
-                raw_lines.append(entry)
-                try:
-                    record = json.loads(entry)
-                    records.append(record)
-                except json.JSONDecodeError as e:
-                    st.warning(f"⚠️ Skipping bad block: {e}\n{entry}")
-            with st.expander("📄 Raw entries from JSONL", expanded=False):
-                st.write(raw_lines)
+            buffer = ""
+            for line in raw_lines:
+                line = line.strip()
+                if line == "}":
+                    buffer += line
+                    try:
+                        records.append(json.loads(buffer))
+                    except json.JSONDecodeError as e:
+                        st.warning(f"⚠️ Skipping bad block: {e}\n{buffer}")
+                    buffer = ""
+                else:
+                    buffer += line
             return records
         except Exception as e:
             st.warning(f"Error reading progress log: {e}")
