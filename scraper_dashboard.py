@@ -13,6 +13,11 @@ from streamlit_autorefresh import st_autorefresh
 st.set_page_config(page_title="Contact Scraper Dashboard")
 st.title("📇 Contact Scraper Dashboard")
 
+st.markdown("""
+> 📢 **What this app does**  
+> This tool helps you **automate enrichment of large contact CSV files** using a secure cloud workflow. Upload your file, and we'll split it, process it using temporary cloud workers, and give you back two files: one with all successful results and one for those that need rechecking.
+""")
+
 # --- GCS Client Setup ---
 if st.secrets.get("GCP_CREDENTIALS"):
     credentials_info = json.loads(st.secrets["GCP_CREDENTIALS"])
@@ -24,16 +29,18 @@ else:
 bucket_name = st.secrets["BUCKET_NAME"]
 bucket = client.bucket(bucket_name)
 
-# --- Generate Session UUID ---
+# --- Upload + Split CSV ---
+uploaded_file = st.file_uploader("Upload full contact CSV to process", type=["csv"])
+num_chunks = 3
+
+# --- Generate Session UUID (only when file is uploaded) ---
 run_id = st.session_state.get("run_id")
-if not run_id:
+if not run_id and uploaded_file:
     run_id = str(uuid.uuid4())[:8]
     st.session_state["run_id"] = run_id
-st.markdown(f"**Session ID:** `{run_id}`")
-
-# --- Upload + Split CSV ---
-uploaded_file = st.file_uploader("Upload full LinkedIn CSV to split and scrape", type=["csv"])
-num_chunks = 3
+    st.experimental_rerun()
+elif run_id:
+    st.markdown(f"**Session ID:** `{run_id}`")
 
 if uploaded_file:
     input_df = pd.read_csv(uploaded_file)
@@ -66,14 +73,14 @@ if uploaded_file:
                 os.remove(path)
         shutil.rmtree("chunks", ignore_errors=True)
         st.balloons()
-        st.success("🚀 All chunks uploaded. Scraping will start automatically.")
+        st.success("🚀 All chunks uploaded. Processing will start automatically.")
         st.session_state["monitoring_active"] = True
 
 # --- Progress Monitoring ---
 if st.session_state.get("monitoring_active", False):
     st_autorefresh(interval=5000, key="autorefresh")
 
-    st.header("📊 Scraping Progress")
+    st.header("📊 Progress Monitor")
     progress_placeholder = st.empty()
     status_text = st.empty()
 
@@ -99,7 +106,7 @@ if st.session_state.get("monitoring_active", False):
                     block = block + '}'
                 try:
                     records.append(json.loads(block))
-                except json.JSONDecodeError as e:
+                except json.JSONDecodeError:
                     pass
             return records
         except Exception as e:
@@ -130,7 +137,7 @@ if st.session_state.get("monitoring_active", False):
         st.rerun()
 
 if not st.session_state.get("monitoring_active", False) and run_id:
-    st.header("📊 Scraping Progress Completed")
+    st.header("📊 Processing Complete")
 
     def extract_zip_to_tmp(zip_path):
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
