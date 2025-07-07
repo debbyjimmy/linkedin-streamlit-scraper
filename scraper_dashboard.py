@@ -91,7 +91,9 @@ if st.session_state.get("monitoring_active", False):
                     if not line:
                         continue
                     try:
-                        records.append(json.loads(line))
+                        records.append(json.loads(line.strip().replace('
+', '').replace('
+', '')))
                     except json.JSONDecodeError as e:
                         print(f"⚠️ Skipping bad line: {e}")
             return records
@@ -103,6 +105,10 @@ if st.session_state.get("monitoring_active", False):
         return [r for r in records if r.get("run_id") == run_id]
 
     all_records = fetch_central_progress()
+    st.markdown(f"**🔍 Monitoring for run_id:** `{run_id}`")
+    all_run_ids = sorted(set(r.get("run_id") for r in all_records if r.get("run_id")))
+    with st.expander("📘 All run_ids found in progress.jsonl", expanded=False):
+        st.write(all_run_ids)
     session_records = filter_records_by_run_id(all_records, run_id)
     with st.expander("🔍 Raw session records", expanded=False):
         st.code(json.dumps(session_records, indent=2))
