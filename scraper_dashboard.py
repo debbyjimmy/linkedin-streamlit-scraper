@@ -100,7 +100,8 @@ if st.session_state.get("monitoring_active", False):
             return []
 
     def filter_records_by_run_id(records, run_id):
-        return [r for r in records if r.get("run_id") == run_id]
+        normalized_run_id = run_id.strip().lower()
+        return [r for r in records if r.get("run_id", "").strip().lower() == normalized_run_id]
 
     all_records = fetch_central_progress()
     st.markdown(f"**🔍 Monitoring for run_id:** `{run_id}`")
